@@ -1099,12 +1099,12 @@ function showToast(msg, type) {
 // --- First-run Setup ---
 function checkFirstRun() {
   fetch("/api/config").then(function(r) { return r.json(); }).then(function(cfg) {
-    if (!cfg.deepseek_api_key || cfg.deepseek_api_key === "" || cfg.deepseek_api_key.indexOf("***") >= 0) {
-      var el = document.getElementById("setup-overlay");
-      if (el) el.classList.remove("hidden");
-    } else {
+    if (cfg.configured) {
       var el = document.getElementById("setup-overlay");
       if (el) el.classList.add("hidden");
+    } else {
+      var el = document.getElementById("setup-overlay");
+      if (el) el.classList.remove("hidden");
     }
   }).catch(function(e) { console.warn("[Pulse] First-run check:", e); });
 }

@@ -1,0 +1,105 @@
+- generic [active] [ref=e1]:
+  - generic [ref=e2]:
+    - generic [ref=e3]: PULSE
+    - generic [ref=e4]:
+      - button "−" [ref=e5] [cursor=pointer]
+      - button "□" [ref=e6] [cursor=pointer]
+      - button "×" [ref=e7] [cursor=pointer]
+  - generic [ref=e8]: CONNECTION LOST — Reconnecting...
+  - banner [ref=e9]:
+    - generic [ref=e10]:
+      - generic [ref=e11]: ★
+      - heading "PULSE" [level=1] [ref=e12]
+    - navigation [ref=e13]:
+      - button "仪表盘" [ref=e14] [cursor=pointer]
+      - button "系统" [ref=e15] [cursor=pointer]
+      - button "历史" [ref=e16] [cursor=pointer]
+      - button "DEVICES" [ref=e17] [cursor=pointer]
+      - button "SETTINGS" [ref=e18] [cursor=pointer]
+    - generic [ref=e19]:
+      - generic [ref=e20]: ●
+      - generic [ref=e21]: 连接中...
+  - main [ref=e22]:
+    - generic [ref=e23]:
+      - generic [ref=e24]:
+        - generic [ref=e25]:
+          - generic [ref=e26]: 今日 TOKEN 用量
+          - generic [ref=e27]: —
+          - generic [ref=e28]:
+            - generic [ref=e29]: —
+            - generic [ref=e30]: vs 昨日
+          - generic [ref=e31]:
+            - generic [ref=e32]:
+              - text: "输入:"
+              - strong [ref=e33]: —
+            - generic [ref=e34]:
+              - text: "输出:"
+              - strong [ref=e35]: —
+        - generic [ref=e36]:
+          - generic [ref=e37]: 今日消费
+          - generic [ref=e38]: ¥0.00
+          - generic [ref=e41]: 限额 ¥5.00
+          - generic [ref=e42]:
+            - generic [ref=e43]:
+              - text: "缓存:"
+              - strong [ref=e44]: —
+            - generic [ref=e45]:
+              - text: "缓存率:"
+              - strong [ref=e46]: —
+        - generic [ref=e47]:
+          - generic [ref=e48]: 账户余额
+          - generic [ref=e49]: ¥—
+          - generic [ref=e50]:
+            - generic [ref=e51]:
+              - text: "本月总消耗:"
+              - strong [ref=e52]: —
+            - generic [ref=e53]:
+              - text: "本周:"
+              - strong [ref=e54]: —
+        - generic [ref=e55]:
+          - generic [ref=e56]: 活跃模型
+          - generic [ref=e57]: —
+          - generic [ref=e58]: 等待数据...
+      - generic [ref=e59]:
+        - generic [ref=e61]: TOKEN 用量趋势 (7日)
+        - generic [ref=e65]: 分模型用量
+        - generic [ref=e69]: 缓存命中率
+        - generic [ref=e73]: 消费趋势
+      - generic [ref=e76]:
+        - generic [ref=e77]:
+          - generic [ref=e78]: CPU
+          - generic [ref=e80]: 0%
+        - generic [ref=e81]:
+          - generic [ref=e82]: 内存
+          - generic [ref=e84]: 0%
+        - generic [ref=e85]:
+          - generic [ref=e86]: 磁盘
+          - generic [ref=e88]: 0%
+        - generic [ref=e89]:
+          - generic [ref=e90]: GPU
+          - generic [ref=e92]: —
+        - generic [ref=e93]:
+          - generic [ref=e94]: 温度
+          - generic [ref=e95]: —
+        - generic [ref=e96]:
+          - generic [ref=e97]: ↑↓
+          - generic [ref=e98]: —
+        - generic [ref=e100]: —
+  - generic [ref=e102]:
+    - heading "PULSE" [level=1] [ref=e103]
+    - paragraph [ref=e104]: Real-time Dashboard — First Time Setup
+    - generic [ref=e105]:
+      - generic [ref=e106]:
+        - text: Deepseek API Key
+        - textbox "Deepseek API Key" [ref=e107]:
+          - /placeholder: sk-...
+      - generic [ref=e108]:
+        - text: Base URL
+        - textbox "Base URL" [ref=e109]: https://api.deepseek.com
+      - generic [ref=e110]:
+        - text: Daily Limit ($)
+        - spinbutton "Daily Limit ($)" [ref=e111]: "5"
+      - generic [ref=e112]:
+        - text: Monthly Limit ($)
+        - spinbutton "Monthly Limit ($)" [ref=e113]: "100"
+      - button "GET STARTED" [ref=e114] [cursor=pointer]

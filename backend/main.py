@@ -9,7 +9,7 @@ from typing import Optional
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, UploadFile, File, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
 import pandas as pd
 
 from config import load_config, save_config, is_configured
@@ -332,7 +332,7 @@ async def api_get_config():
         cfg["deepseek_api_key"] = key[:4] + "*" * (len(key) - 8) + key[-4:]
     elif key:
         cfg["deepseek_api_key"] = "***"
-    return cfg
+    return {**cfg, "configured": bool(key)}
 
 
 @app.post("/api/csv/import")
@@ -410,8 +410,7 @@ async def api_system_current():
 @app.get("/api/devices")
 async def api_devices_list():
     """List all configured devices."""
-    devices = await get_devices()
-    return {"devices": devices}
+    return await get_devices()
 
 
 @app.post("/api/devices")
@@ -473,10 +472,18 @@ async def api_devices_test(device_id: int):
         raise HTTPException(502, f"WMI connection failed: {str(e)}")
 
 
-# ── Serve frontend (must come after API routes to avoid route hijacking) ──
+# ── Serve frontend (catch-all at end, after all API+WS routes) ──
+# Note: NOT using app.mount() because it intercepts ALL paths including /ws.
+# Instead, a catch-all GET route serves static files while allowing WebSocket
+# and API routes to match first via normal route resolution order.
 frontend_dir = Path(__file__).parent.parent / "frontend"
-if frontend_dir.exists():
-    app.mount("/", StaticFiles(directory=str(frontend_dir), html=True), name="frontend")
+
+@app.get("/{path:path}", include_in_schema=False)
+async def serve_frontend(path: str):
+    file_path = frontend_dir / path
+    if file_path.exists() and file_path.is_file():
+        return FileResponse(file_path)
+    return FileResponse(frontend_dir / "index.html")
 
 
 # ── Entry ──────────────────────────────────────────────
