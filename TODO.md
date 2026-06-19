@@ -18,8 +18,8 @@
 ## Phase 3: Tauri 壳搭建 🏗️
 
 - [x] src-tauri/ 项目初始化（Cargo.toml + tauri.conf.json + main.rs）
-- [ ] Python Sidecar 整合（Tauri 自动拉起后端）
-- [ ] 系统托盘 + 全局快捷键
+- [x] Python Sidecar 整合（Tauri 自动拉起后端）
+- [x] 系统托盘 + 全局快捷键
 
 ## Phase 4: 功能增强 🚀
 
@@ -41,6 +41,6 @@
 |-------|------|------|
 | Phase 1: 基础设施 | 3/3 | ✅ 完成 |
 | Phase 2: 运行验证 | 2/2 | ✅ 完成 |
-| Phase 3: Tauri 壳 | 1/3 | ⏳ 执行中 |
+| Phase 3: Tauri 壳 | 3/3 | ✅ 完成 |
 | Phase 4: 功能增强 | 0/3 | ⏳ 待开始 |
 | Phase 5: 生产打磨 | 0/3 | ⏳ 待开始 |
