@@ -6,18 +6,18 @@
 
 ## Phase 1: 基础设施 ⚡
 
-- [ ] Git 仓库初始化 + .gitignore
-- [ ] Memory 持久化建立（用户画像 / 项目架构 / 设计约束 / 工作偏好）
-- [ ] 代码扫描修复（lifespan 警告、错误处理、未使用导入）
+- [x] Git 仓库初始化 + .gitignore
+- [x] Memory 持久化建立（用户画像 / 项目架构 / 设计约束 / 工作偏好）
+- [x] 代码扫描修复（lifespan 警告、错误处理、未使用导入）
 
 ## Phase 2: 运行验证 🔍
 
-- [ ] 启动后端验证（Python FastAPI 正常启动）
-- [ ] 前端访问确认（localhost:8080 可访问）
+- [x] 启动后端验证（Python FastAPI 正常启动）
+- [x] 前端访问确认（localhost:8080 可访问）
 
 ## Phase 3: Tauri 壳搭建 🏗️
 
-- [ ] src-tauri/ 项目初始化（Cargo.toml + tauri.conf.json + main.rs）
+- [x] src-tauri/ 项目初始化（Cargo.toml + tauri.conf.json + main.rs）
 - [ ] Python Sidecar 整合（Tauri 自动拉起后端）
 - [ ] 系统托盘 + 全局快捷键
 
@@ -39,8 +39,8 @@
 
 | Phase | 进度 | 状态 |
 |-------|------|------|
-| Phase 1: 基础设施 | 0/3 | ⏳ 执行中 |
-| Phase 2: 运行验证 | 0/2 | ⏳ 待开始 |
-| Phase 3: Tauri 壳 | 0/3 | ⏳ 待开始 |
+| Phase 1: 基础设施 | 3/3 | ✅ 完成 |
+| Phase 2: 运行验证 | 2/2 | ✅ 完成 |
+| Phase 3: Tauri 壳 | 1/3 | ⏳ 执行中 |
 | Phase 4: 功能增强 | 0/3 | ⏳ 待开始 |
 | Phase 5: 生产打磨 | 0/3 | ⏳ 待开始 |

@@ -49,11 +49,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Serve frontend static files
-frontend_dir = Path(__file__).parent.parent / "frontend"
-if frontend_dir.exists():
-    app.mount("/", StaticFiles(directory=str(frontend_dir), html=True), name="frontend")
-
 # ── State ──────────────────────────────────────────────
 config = load_config()
 deepseek = DeepseekCollector(
@@ -406,6 +401,12 @@ async def api_csv_import(file: UploadFile = File(...)):
 async def api_system_current():
     """Get latest system data snapshot."""
     return latest_system_data or collect_system_data()
+
+
+# ── Serve frontend (must come after API routes to avoid route hijacking) ──
+frontend_dir = Path(__file__).parent.parent / "frontend"
+if frontend_dir.exists():
+    app.mount("/", StaticFiles(directory=str(frontend_dir), html=True), name="frontend")
 
 
 # ── Entry ──────────────────────────────────────────────

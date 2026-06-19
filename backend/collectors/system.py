@@ -1,16 +1,16 @@
 """System data collector using psutil and WMI."""
 import psutil
 import platform
-import json
 from datetime import datetime
 from typing import Optional
 
 
 def get_cpu_info() -> dict:
     """Get CPU usage and related info."""
+    per_cpu = psutil.cpu_percent(interval=0, percpu=True)
     return {
-        "percent": psutil.cpu_percent(interval=0),
-        "per_cpu": psutil.cpu_percent(interval=0, percpu=True),
+        "percent": round(sum(per_cpu) / len(per_cpu), 1) if per_cpu else 0.0,
+        "per_cpu": per_cpu,
         "count": psutil.cpu_count(),
         "freq": psutil.cpu_freq()._asdict() if psutil.cpu_freq() else {},
         "load_avg": psutil.getloadavg() if hasattr(psutil, "getloadavg") else []
