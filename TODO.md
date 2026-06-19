@@ -23,15 +23,15 @@
 
 ## Phase 4: 功能增强 🚀
 
-- [ ] 首次启动配置引导（API Key 设置页）
-- [ ] LAN 设备管理 UI（模块化配置远程设备监控）
-- [ ] 无边框窗口 + 自定义标题栏（构成主义风格窗口 chrome）
+- [x] 首次启动配置引导（API Key 设置页）
+- [x] LAN 设备管理 UI（模块化配置远程设备监控）
+- [x] 无边框窗口 + 自定义标题栏（构成主义风格窗口 chrome）
 
 ## Phase 5: 生产打磨 🔧
 
-- [ ] 错误处理 + 边缘状态（网络断开 / API 不可用 / 数据空洞 UI 降级）
-- [ ] 开机自启（tauri-plugin-autostart）
-- [ ] 自动更新机制（tauri-plugin-updater）
+- [x] 错误处理 + 边缘状态（网络断开 / API 不可用 / 数据空洞 UI 降级）
+- [x] 开机自启（tauri-plugin-autostart）
+- [x] 自动更新机制（tauri-plugin-updater）
 
 ---
 
@@ -42,5 +42,5 @@
 | Phase 1: 基础设施 | 3/3 | ✅ 完成 |
 | Phase 2: 运行验证 | 2/2 | ✅ 完成 |
 | Phase 3: Tauri 壳 | 3/3 | ✅ 完成 |
-| Phase 4: 功能增强 | 0/3 | ⏳ 待开始 |
-| Phase 5: 生产打磨 | 0/3 | ⏳ 待开始 |
+| Phase 4: 功能增强 | 3/3 | ✅ 完成 |
+| Phase 5: 生产打磨 | 3/3 | ✅ 完成 |
