@@ -1,0 +1,9 @@
+venv/
+__pycache__/
+*.pyc
+data/
+backend/config.json
+.env
+.DS_Store
+src-tauri/target/
+*.log

@@ -1,0 +1,275 @@
+"""SQLite database layer for Pulse."""
+import json
+import aiosqlite
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Optional, List
+
+DB_PATH = Path(__file__).parent.parent / "data" / "pulse.db"
+
+
+async def init_db():
+    """Create tables if they don't exist."""
+    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS deepseek_usage (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                timestamp TEXT NOT NULL,
+                model TEXT NOT NULL,
+                input_tokens INTEGER DEFAULT 0,
+                output_tokens INTEGER DEFAULT 0,
+                cached_tokens INTEGER DEFAULT 0,
+                total_tokens INTEGER DEFAULT 0,
+                cost REAL DEFAULT 0.0
+            )
+        """)
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS deepseek_balance (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                timestamp TEXT NOT NULL,
+                balance REAL NOT NULL,
+                currency TEXT DEFAULT 'CNY'
+            )
+        """)
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS spending_limits (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                type TEXT NOT NULL,
+                limit_amount REAL NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+        """)
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS csv_imports (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                filename TEXT NOT NULL,
+                imported_at TEXT NOT NULL,
+                records_count INTEGER DEFAULT 0
+            )
+        """)
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS lan_devices (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                host TEXT NOT NULL,
+                username TEXT DEFAULT '',
+                protocol TEXT DEFAULT 'wmi',
+                port INTEGER DEFAULT 0,
+                enabled INTEGER DEFAULT 1,
+                interval_sec INTEGER DEFAULT 30,
+                last_seen TEXT,
+                created_at TEXT NOT NULL
+            )
+        """)
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS lan_device_snapshots (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                device_id INTEGER NOT NULL,
+                timestamp TEXT NOT NULL,
+                data_json TEXT NOT NULL,
+                FOREIGN KEY (device_id) REFERENCES lan_devices(id)
+            )
+        """)
+        await db.execute("""
+            CREATE INDEX IF NOT EXISTS idx_usage_timestamp
+            ON deepseek_usage(timestamp)
+        """)
+        await db.execute("""
+            CREATE INDEX IF NOT EXISTS idx_usage_model
+            ON deepseek_usage(model)
+        """)
+        await db.commit()
+
+
+async def save_usage_records(records: list):
+    """Save Deepseek usage records batch."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        now = datetime.now(timezone.utc).isoformat()
+        await db.executemany(
+            "INSERT INTO deepseek_usage (timestamp, model, input_tokens, output_tokens, cached_tokens, total_tokens, cost) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            [(now, r.get("model", "unknown"),
+              r.get("input_tokens", 0),
+              r.get("output_tokens", 0),
+              r.get("cached_tokens", 0),
+              r.get("total_tokens", 0),
+              r.get("cost", 0.0)) for r in records]
+        )
+        await db.commit()
+
+
+async def save_balance(balance: float, currency: str = "CNY"):
+    """Save Deepseek balance snapshot."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        now = datetime.now(timezone.utc).isoformat()
+        await db.execute(
+            "INSERT INTO deepseek_balance (timestamp, balance, currency) VALUES (?, ?, ?)",
+            (now, balance, currency)
+        )
+        await db.commit()
+
+
+async def get_usage_history(days: int = 30, model: Optional[str] = None) -> List[dict]:
+    """Get usage history for the last N days."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        query = """
+            SELECT timestamp, model, input_tokens, output_tokens,
+                   cached_tokens, total_tokens, cost
+            FROM deepseek_usage
+            WHERE timestamp >= datetime('now', ? || ' days', 'utc')
+        """
+        params = [f"-{days}"]
+        if model:
+            query += " AND model = ?"
+            params.append(model)
+        query += " ORDER BY timestamp ASC"
+        cursor = await db.execute(query, params)
+        rows = await cursor.fetchall()
+        return [dict(r) for r in rows]
+
+
+async def get_usage_summary(days: int = 1) -> dict:
+    """Get aggregated usage summary."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute("""
+            SELECT
+                COALESCE(SUM(input_tokens), 0) as total_input,
+                COALESCE(SUM(output_tokens), 0) as total_output,
+                COALESCE(SUM(cached_tokens), 0) as total_cached,
+                COALESCE(SUM(total_tokens), 0) as total_tokens,
+                COALESCE(SUM(cost), 0.0) as total_cost
+            FROM deepseek_usage
+            WHERE timestamp >= datetime('now', ? || ' days', 'utc')
+        """, (f"-{days}",))
+        row = await cursor.fetchone()
+        return dict(row) if row else {}
+
+
+async def get_model_breakdown(days: int = 1) -> List[dict]:
+    """Get per-model breakdown for the period."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute("""
+            SELECT
+                model,
+                COALESCE(SUM(input_tokens), 0) as input_tokens,
+                COALESCE(SUM(output_tokens), 0) as output_tokens,
+                COALESCE(SUM(cached_tokens), 0) as cached_tokens,
+                COALESCE(SUM(total_tokens), 0) as total_tokens,
+                COALESCE(SUM(cost), 0.0) as cost
+            FROM deepseek_usage
+            WHERE timestamp >= datetime('now', ? || ' days', 'utc')
+            GROUP BY model
+            ORDER BY total_tokens DESC
+        """, (f"-{days}",))
+        rows = await cursor.fetchall()
+        return [dict(r) for r in rows]
+
+
+async def get_balance_history(days: int = 30) -> List[dict]:
+    """Get balance snapshots for trend chart."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute("""
+            SELECT timestamp, balance, currency
+            FROM deepseek_balance
+            WHERE timestamp >= datetime('now', ? || ' days', 'utc')
+            ORDER BY timestamp ASC
+        """, (f"-{days}",))
+        rows = await cursor.fetchall()
+        return [dict(r) for r in rows]
+
+
+async def import_csv_data(records: list, filename: str) -> int:
+    """Import CSV records into the database."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        now = datetime.now(timezone.utc).isoformat()
+        count = 0
+        for r in records:
+            await db.execute(
+                "INSERT INTO deepseek_usage (timestamp, model, input_tokens, output_tokens, cached_tokens, total_tokens, cost) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (r.get("timestamp", now),
+                 r.get("model", "unknown"),
+                 r.get("input_tokens", 0),
+                 r.get("output_tokens", 0),
+                 r.get("cached_tokens", 0),
+                 r.get("total_tokens", 0),
+                 r.get("cost", 0.0))
+            )
+            count += 1
+        await db.execute(
+            "INSERT INTO csv_imports (filename, imported_at, records_count) VALUES (?, ?, ?)",
+            (filename, now, count)
+        )
+        await db.commit()
+        return count
+
+
+# ── LAN Devices ─────────────────────────────────────────
+
+
+async def get_lan_devices() -> List[dict]:
+    """Get all configured LAN devices."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            "SELECT * FROM lan_devices ORDER BY name ASC"
+        )
+        rows = await cursor.fetchall()
+        return [dict(r) for r in rows]
+
+
+async def add_lan_device(name: str, host: str, username: str = "",
+                         protocol: str = "wmi", port: int = 0,
+                         interval_sec: int = 30) -> int:
+    """Add a new LAN device to monitor."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        now = datetime.now(timezone.utc).isoformat()
+        cursor = await db.execute(
+            "INSERT INTO lan_devices (name, host, username, protocol, port, interval_sec, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (name, host, username, protocol, port, interval_sec, now)
+        )
+        await db.commit()
+        return cursor.lastrowid or 0
+
+
+async def update_lan_device(device_id: int, **kwargs) -> bool:
+    """Update LAN device fields."""
+    allowed = {"name", "host", "username", "protocol", "port",
+               "enabled", "interval_sec", "last_seen"}
+    updates = {k: v for k, v in kwargs.items() if k in allowed}
+    if not updates:
+        return False
+    sets = ", ".join(f"{k} = ?" for k in updates)
+    vals = list(updates.values()) + [device_id]
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(f"UPDATE lan_devices SET {sets} WHERE id = ?", vals)
+        await db.commit()
+        return True
+
+
+async def delete_lan_device(device_id: int) -> bool:
+    """Remove a LAN device and its snapshots."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("DELETE FROM lan_device_snapshots WHERE device_id = ?", (device_id,))
+        await db.execute("DELETE FROM lan_devices WHERE id = ?", (device_id,))
+        await db.commit()
+        return True
+
+
+async def save_lan_snapshot(device_id: int, data: dict) -> int:
+    """Save a data snapshot from a LAN device."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        now = datetime.now(timezone.utc).isoformat()
+        await db.execute(
+            "UPDATE lan_devices SET last_seen = ? WHERE id = ?",
+            (now, device_id)
+        )
+        cursor = await db.execute(
+            "INSERT INTO lan_device_snapshots (device_id, timestamp, data_json) VALUES (?, ?, ?)",
+            (device_id, now, json.dumps(data, default=str))
+        )
+        await db.commit()
+        return cursor.lastrowid or 0
