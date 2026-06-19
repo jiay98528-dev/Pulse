@@ -29,13 +29,21 @@ class DeepseekCollector:
                 async with session.get(f"{self.base_url}/user/balance", timeout=10) as resp:
                     if resp.status == 200:
                         data = await resp.json()
-                        balance = data.get("balance", 0)
-                        currency = data.get("currency", "CNY")
-                        if "available_balance" in data:
-                            balance = data["available_balance"]
-                        self.last_balance = float(balance)
+                        # Deepseek API returns balance_infos array
+                        # e.g. {"is_available":true,"balance_infos":[{"balance":8.30,"currency":"CNY"}]}
+                        balance = 0.0
+                        currency = "CNY"
+                        if "balance_infos" in data and data["balance_infos"]:
+                            info = data["balance_infos"][0]
+                            balance = float(info.get("balance", info.get("total_balance", 0)))
+                            currency = info.get("currency", "CNY")
+                        elif "available_balance" in data:
+                            balance = float(data["available_balance"])
+                        elif "balance" in data:
+                            balance = float(data["balance"])
+                        self.last_balance = balance
                         self.last_currency = currency
-                        return {"balance": self.last_balance, "currency": self.last_currency}
+                        return {"balance": balance, "currency": currency}
                     return None
         except Exception:
             return None
