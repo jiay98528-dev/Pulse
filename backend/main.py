@@ -16,7 +16,8 @@ from config import load_config, save_config, is_configured
 from database import (
     init_db, save_usage_records, save_balance,
     get_usage_history, get_usage_summary, get_model_breakdown,
-    get_balance_history, import_csv_data
+    get_balance_history, import_csv_data,
+    get_devices, get_device, add_device, update_device, delete_device
 )
 from collectors.system import collect_all as collect_system_data
 from collectors.deepseek import DeepseekCollector
@@ -401,6 +402,75 @@ async def api_csv_import(file: UploadFile = File(...)):
 async def api_system_current():
     """Get latest system data snapshot."""
     return latest_system_data or collect_system_data()
+
+
+# ── Device Management API ────────────────────────────────
+
+
+@app.get("/api/devices")
+async def api_devices_list():
+    """List all configured devices."""
+    devices = await get_devices()
+    return {"devices": devices}
+
+
+@app.post("/api/devices")
+async def api_devices_add(body: dict):
+    """Add a new device. Requires name and host."""
+    name = body.get("name", "").strip()
+    host = body.get("host", "").strip()
+    if not name or not host:
+        raise HTTPException(400, "name and host are required")
+    device_id = await add_device(
+        name=name,
+        host=host,
+        username=body.get("username", ""),
+        password=body.get("password", ""),
+        port=int(body.get("port", 135)),
+        enabled=int(body.get("enabled", 1)),
+    )
+    device = await get_device(device_id)
+    return {"status": "ok", "device": device}
+
+
+@app.put("/api/devices/{device_id}")
+async def api_devices_update(device_id: int, body: dict):
+    """Update device fields."""
+    existing = await get_device(device_id)
+    if not existing:
+        raise HTTPException(404, "Device not found")
+    ok = await update_device(device_id, body)
+    device = await get_device(device_id)
+    return {"status": "ok" if ok else "no_change", "device": device}
+
+
+@app.delete("/api/devices/{device_id}")
+async def api_devices_delete(device_id: int):
+    """Delete a device."""
+    existing = await get_device(device_id)
+    if not existing:
+        raise HTTPException(404, "Device not found")
+    ok = await delete_device(device_id)
+    return {"status": "ok" if ok else "not_found"}
+
+
+@app.post("/api/devices/{device_id}/test")
+async def api_devices_test(device_id: int):
+    """Test WMI connection to a device."""
+    device = await get_device(device_id)
+    if not device:
+        raise HTTPException(404, "Device not found")
+    try:
+        from collectors.wmi_remote import WMIRemoteCollector
+        tester = WMIRemoteCollector(
+            host=device["host"],
+            username=device.get("username", ""),
+            password=device.get("password", "")
+        )
+        result = await tester.test_connection()
+        return {"status": "ok", "result": result}
+    except Exception as e:
+        raise HTTPException(502, f"WMI connection failed: {str(e)}")
 
 
 # ── Serve frontend (must come after API routes to avoid route hijacking) ──

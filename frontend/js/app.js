@@ -97,21 +97,22 @@ function connectWs() {
     const url = getWsUrl();
     state.ws = new WebSocket(url);
 
-    state.ws.onopen = () => {
+    state.ws.onopen = function() {
         state.connected = true;
         $('#connStatus').className = 'conn-status connected';
         $('#connStatus').textContent = '●';
         $('#connText').textContent = '已连接';
+        hideConnectionLost();
+        reconnectAttempts = 0;
         // Send initial ping
         state.ws.send(JSON.stringify({ action: 'ping' }));
     };
 
-    state.ws.onclose = () => {
-        state.connected = false;
-        $('#connStatus').className = 'conn-status disconnected';
-        $('#connStatus').textContent = '●';
-        $('#connText').textContent = '断开';
-        setTimeout(connectWs, 3000);
+    state.ws.onclose = function(e) {
+        showConnectionLost();
+        reconnectAttempts++;
+        var delay = Math.min(1000 * Math.pow(2, reconnectAttempts), 30000);
+        setTimeout(function() { connectWs(); }, delay);
     };
 
     state.ws.onmessage = (evt) => {
@@ -1047,6 +1048,208 @@ function init() {
     }, 30000);
 
     console.log('[Pulse] Initialized');
+    initPhase45();
+}
+
+// --- Title Bar ---
+function initTitleBar() {
+  document.getElementById("titlebar-minimize").onclick = function() {
+    if (window.__TAURI__) { window.__TAURI__.window.getCurrent().minimize(); }
+  };
+  document.getElementById("titlebar-maximize").onclick = function() {
+    if (window.__TAURI__) {
+      var w = window.__TAURI__.window.getCurrent();
+      w.isMaximized().then(function(m) { if (m) w.unmaximize(); else w.maximize(); });
+    } else {
+      if (!document.fullscreenElement) document.documentElement.requestFullscreen();
+      else document.exitFullscreen();
+    }
+  };
+  document.getElementById("titlebar-close").onclick = function() {
+    if (window.__TAURI__) { window.__TAURI__.process.exit(0); }
+    else if (confirm("Close Pulse?")) window.close();
+  };
+  document.body.classList.add("has-titlebar");
+}
+
+// --- Connection Status ---
+var reconnectAttempts = 0;
+function showConnectionLost() {
+  var b = document.getElementById("connection-banner");
+  if (b) { b.classList.remove("hidden"); b.textContent = "CONNECTION LOST — Reconnecting..."; }
+}
+function hideConnectionLost() {
+  var b = document.getElementById("connection-banner");
+  if (b) b.classList.add("hidden");
+  reconnectAttempts = 0;
+}
+
+// --- Toast ---
+function showToast(msg, type) {
+  type = type || "info";
+  var c = document.getElementById("toast-container");
+  if (!c) return;
+  var t = document.createElement("div");
+  t.className = "toast " + type;
+  t.textContent = msg;
+  c.appendChild(t);
+  setTimeout(function() { t.remove(); }, 4000);
+}
+
+// --- First-run Setup ---
+function checkFirstRun() {
+  fetch("/api/config").then(function(r) { return r.json(); }).then(function(cfg) {
+    if (!cfg.deepseek_api_key || cfg.deepseek_api_key === "" || cfg.deepseek_api_key.indexOf("***") >= 0) {
+      var el = document.getElementById("setup-overlay");
+      if (el) el.classList.remove("hidden");
+    } else {
+      var el = document.getElementById("setup-overlay");
+      if (el) el.classList.add("hidden");
+    }
+  }).catch(function(e) { console.warn("[Pulse] First-run check:", e); });
+}
+
+// --- Setup Form ---
+function initSetupForm() {
+  var form = document.getElementById("setup-form");
+  if (!form) return;
+  form.onsubmit = function(e) {
+    e.preventDefault();
+    var btn = form.querySelector(".setup-btn");
+    btn.textContent = "SAVING..."; btn.disabled = true;
+    fetch("/api/config", {
+      method: "POST", headers: {"Content-Type":"application/json"},
+      body: JSON.stringify({
+        deepseek_api_key: document.getElementById("setup-api-key").value,
+        deepseek_base_url: document.getElementById("setup-base-url").value,
+        daily_spending_limit: parseFloat(document.getElementById("setup-daily-limit").value) || 5,
+        monthly_spending_limit: parseFloat(document.getElementById("setup-monthly-limit").value) || 100,
+      })
+    }).then(function(r) {
+      if (r.ok) { showToast("Config saved","success"); location.reload(); }
+      else showToast("Save failed","error");
+    }).catch(function(e) { showToast("Error: "+e.message,"error"); });
+  };
+}
+
+// --- Settings Form ---
+function initSettingsForm() {
+  var form = document.getElementById("settings-form");
+  if (!form) return;
+  form.onsubmit = function(e) {
+    e.preventDefault();
+    fetch("/api/config", {
+      method: "POST", headers: {"Content-Type":"application/json"},
+      body: JSON.stringify({
+        deepseek_api_key: document.getElementById("settings-api-key").value,
+        deepseek_base_url: document.getElementById("settings-base-url").value,
+        daily_spending_limit: parseFloat(document.getElementById("settings-daily-limit").value) || 5,
+        monthly_spending_limit: parseFloat(document.getElementById("settings-monthly-limit").value) || 100,
+      })
+    }).then(function(r) {
+      if (r.ok) showToast("Config saved","success");
+      else showToast("Save failed","error");
+    }).catch(function(e) { showToast("Error","error"); });
+  };
+}
+
+// --- Autostart Toggle ---
+function initAutostartToggle() {
+  var cb = document.getElementById("settings-autostart");
+  if (!cb) return;
+  cb.onchange = function() {
+    if (cb.checked) showToast("Auto-start enabled","info");
+    else showToast("Auto-start disabled","info");
+  };
+}
+
+// --- Devices ---
+function loadDevices() {
+  var c = document.getElementById("device-list");
+  if (!c) return;
+  c.innerHTML = "<div class=loading-spinner></div>";
+  fetch("/api/devices").then(function(r) { return r.json(); }).then(function(devices) {
+    if (!devices || devices.length === 0) {
+      c.innerHTML = "<div class=empty-state><div class=icon>No Devices</div><div class=text>Click above to add your first device</div></div>";
+      return;
+    }
+    c.innerHTML = "";
+    for (var i = 0; i < devices.length; i++) {
+      var d = devices[i];
+      var card = document.createElement("div");
+      card.className = "device-card";
+      card.innerHTML =
+        "<div class=device-info>" +
+          "<div class=device-name><span class=device-status " + (d.enabled ? "online" : "offline") + "></span>" + d.name + "</div>" +
+          "<div class=device-host>" + d.host + ":" + (d.port || 135) + "</div>" +
+        "</div>" +
+        "<div class=device-actions>" +
+          "<button class=btn-secondary onclick=deleteDevice(" + d.id + ")>DELETE</button>" +
+        "</div>";
+      c.appendChild(card);
+    }
+  }).catch(function(e) {
+    c.innerHTML = "<div class=empty-state>Failed to load devices</div>";
+  });
+}
+
+function deleteDevice(id) {
+  if (!confirm("Delete this device?")) return;
+  fetch("/api/devices/" + id, {method:"DELETE"}).then(function() {
+    showToast("Device deleted","success");
+    loadDevices();
+  });
+}
+
+function initDeviceForm() {
+  var form = document.getElementById("device-form");
+  if (!form) return;
+  form.onsubmit = function(e) {
+    e.preventDefault();
+    var payload = {
+      name: document.getElementById("device-name").value,
+      host: document.getElementById("device-host").value,
+      username: document.getElementById("device-username").value,
+      password: document.getElementById("device-password").value,
+      port: parseInt(document.getElementById("device-port").value) || 135,
+      enabled: document.getElementById("device-enabled").checked,
+    };
+    fetch("/api/devices", {
+      method: "POST", headers: {"Content-Type":"application/json"},
+      body: JSON.stringify(payload),
+    }).then(function(r) {
+      if (r.ok) {
+        showToast("Device added","success");
+        document.getElementById("device-form-overlay").classList.add("hidden");
+        loadDevices();
+      } else showToast("Save failed","error");
+    }).catch(function(e) { showToast("Error","error"); });
+  };
+  document.getElementById("device-form-cancel").onclick = function() {
+    document.getElementById("device-form-overlay").classList.add("hidden");
+  };
+  document.getElementById("device-add-btn").onclick = function() {
+    document.getElementById("device-form-overlay").classList.remove("hidden");
+  };
+}
+
+// --- Load devices on tab click ---
+// --- Init Phase 4+5 ---
+function initPhase45() {
+  if (!document.getElementById("titlebar")) return; // skip if HTML not loaded
+  initTitleBar();
+  initSetupForm();
+  initSettingsForm();
+  initAutostartToggle();
+  initDeviceForm();
+  checkFirstRun();
+  var devicesTab = document.querySelector("[data-tab=devices]");
+  if (devicesTab) devicesTab.onclick = function() { setTimeout(loadDevices, 100); };
+  if (!document.getElementById("toast-container")) {
+    var tc = document.createElement("div");
+    tc.id = "toast-container";
+    document.body.appendChild(tc);
+  }
 }
 
 // Start when DOM is ready

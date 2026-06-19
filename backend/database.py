@@ -71,6 +71,7 @@ async def init_db():
                 FOREIGN KEY (device_id) REFERENCES lan_devices(id)
             )
         """)
+        await init_devices_table()
         await db.execute("""
             CREATE INDEX IF NOT EXISTS idx_usage_timestamp
             ON deepseek_usage(timestamp)
@@ -205,6 +206,79 @@ async def import_csv_data(records: list, filename: str) -> int:
         )
         await db.commit()
         return count
+
+
+# ── Devices ──────────────────────────────────────────────
+
+
+async def init_devices_table():
+    """Create the devices table if it doesn't exist."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS devices (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                host TEXT NOT NULL,
+                username TEXT DEFAULT '',
+                password TEXT DEFAULT '',
+                port INTEGER DEFAULT 135,
+                enabled INTEGER DEFAULT 1,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+
+
+async def get_devices() -> list:
+    """Get all configured devices."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute("SELECT * FROM devices ORDER BY name ASC")
+        rows = await cursor.fetchall()
+        return [dict(r) for r in rows]
+
+
+async def get_device(device_id: int):
+    """Get a single device by id, or None if not found."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute("SELECT * FROM devices WHERE id = ?", (device_id,))
+        row = await cursor.fetchone()
+        return dict(row) if row else None
+
+
+async def add_device(name: str, host: str, username: str = "",
+                     password: str = "", port: int = 135,
+                     enabled: int = 1) -> int:
+    """Add a new device. Returns the new row id."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute(
+            "INSERT INTO devices (name, host, username, password, port, enabled) VALUES (?, ?, ?, ?, ?, ?)",
+            (name, host, username, password, port, enabled)
+        )
+        await db.commit()
+        return cursor.lastrowid or 0
+
+
+async def update_device(device_id: int, data: dict) -> bool:
+    """Update device fields from a dict. Returns True if any row changed."""
+    allowed = {"name", "host", "username", "password", "port", "enabled"}
+    updates = {k: v for k, v in data.items() if k in allowed}
+    if not updates:
+        return False
+    sets = ", ".join(f"{k} = ?" for k in updates)
+    vals = list(updates.values()) + [device_id]
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute(f"UPDATE devices SET {sets} WHERE id = ?", vals)
+        await db.commit()
+        return cursor.rowcount > 0
+
+
+async def delete_device(device_id: int) -> bool:
+    """Remove a device by id. Returns True if a row was deleted."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute("DELETE FROM devices WHERE id = ?", (device_id,))
+        await db.commit()
+        return cursor.rowcount > 0
 
 
 # ── LAN Devices ─────────────────────────────────────────

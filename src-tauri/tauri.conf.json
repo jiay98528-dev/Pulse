@@ -16,7 +16,9 @@
         "width": 1280,
         "height": 720,
         "resizable": true,
-        "center": true
+        "center": true,
+        "decorations": false,
+        "dragDropEnabled": false
       }
     ],
     "security": {
@@ -33,5 +35,11 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ]
+  },
+  "plugins": {
+    "updater": {
+      "endpoints": ["https://releases.pulse-dashboard.com/{{target}}/{{current_version}}"],
+      "pubkey": ""
+    }
   }
 }
