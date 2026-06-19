@@ -7,3 +7,6 @@ backend/config.json
 .DS_Store
 src-tauri/target/
 *.log
+.playwright-mcp/
+audit-*.png
+AGENTS.md
