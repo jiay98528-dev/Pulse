@@ -1378,12 +1378,15 @@ body {
 /* ══════════════════════════════════════════════════
    Body adjustment for title bar offset
    ══════════════════════════════════════════════════ */
+body.has-titlebar .header {
+    top: 36px;
+}
 body.has-titlebar main,
 body.has-titlebar .tab-content {
     padding-top: 36px;
 }
 body.has-titlebar #connection-banner {
-    top: 36px;
+    top: 72px;
 }
 
 /* ══════════════════════════════════════════════════

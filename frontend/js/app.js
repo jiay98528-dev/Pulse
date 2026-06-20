@@ -2277,7 +2277,8 @@ $('#csvImportBtn')?.addEventListener('click', async () => {
             // Refresh analysis data without page reload
             if (typeof loadAnalysisData === 'function') loadAnalysisData();
         } else {
-            showCsvResult('✕ 导入失败', 'error');
+            var errMsg = result.detail || '未知错误';
+            showCsvResult('✕ 导入失败: ' + errMsg, 'error');
         }
     } catch (e) {
         showCsvResult('✕ 上传错误: ' + e.message, 'error');
