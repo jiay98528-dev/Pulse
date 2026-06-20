@@ -863,8 +863,8 @@ body {
     align-items: center;
     justify-content: space-between;
     height: 36px;
-    background: #000;
-    color: #fff;
+    background: var(--color-black);
+    color: var(--color-white);
     position: fixed;
     top: 0;
     left: 0;
@@ -877,7 +877,7 @@ body {
     font-family: Tektur, Impact, sans-serif;
     font-size: 16px;
     letter-spacing: 4px;
-    color: #CC0000;
+    color: var(--color-red);
 }
 #titlebar-right {
     display: flex;
@@ -888,7 +888,7 @@ body {
     height: 36px;
     border: none;
     background: transparent;
-    color: #fff;
+    color: var(--color-white);
     font-size: 16px;
     cursor: pointer;
     border-radius: 0;
@@ -897,10 +897,10 @@ body {
     justify-content: center;
 }
 .titlebar-btn:hover {
-    background: #333;
+    background: var(--color-grey-20);
 }
 #titlebar-close:hover {
-    background: #CC0000;
+    background: var(--color-red);
 }
 
 /* ══════════════════════════════════════════════════
@@ -912,8 +912,8 @@ body {
     left: 0;
     right: 0;
     z-index: 999;
-    background: #CC0000;
-    color: #fff;
+    background: var(--color-red);
+    color: var(--color-white);
     text-align: center;
     padding: 6px;
     font-size: 14px;
@@ -943,8 +943,8 @@ body {
     display: none;
 }
 .overlay-content {
-    background: #1A1A1A;
-    border: 2px solid #CC0000;
+    background: var(--color-grey-10);
+    border: 2px solid var(--color-red);
     padding: 32px;
     min-width: 400px;
     max-width: 520px;
@@ -952,27 +952,27 @@ body {
 .overlay-content h1 {
     font-family: Tektur, Impact, sans-serif;
     font-size: 48px;
-    color: #CC0000;
+    color: var(--color-red);
     text-align: center;
     letter-spacing: 8px;
     margin: 0 0 8px;
 }
 .overlay-content h3 {
     font-size: 18px;
-    color: #fff;
+    color: var(--color-white);
     margin: 0 0 16px;
     text-transform: uppercase;
     letter-spacing: 2px;
 }
 .setup-subtitle {
     text-align: center;
-    color: #808080;
+    color: var(--color-grey-50);
     margin: 0 0 24px;
     font-size: 14px;
 }
 .overlay-content label {
     display: block;
-    color: #B3B3B3;
+    color: var(--color-grey-70);
     font-size: 14px;
     margin-bottom: 16px;
     text-transform: uppercase;
@@ -984,16 +984,16 @@ body {
     display: block;
     width: 100%;
     margin-top: 4px;
-    background: #000;
-    border: 1px solid #4D4D4D;
-    color: #fff;
+    background: var(--color-black);
+    border: 1px solid var(--color-grey-30);
+    color: var(--color-white);
     padding: 10px 12px;
     font-size: 16px;
     border-radius: 0;
     box-sizing: border-box;
 }
 .overlay-content input:focus {
-    border-color: #CC0000;
+    border-color: var(--color-red);
     outline: none;
 }
 .setup-btn {
@@ -1005,8 +1005,8 @@ body {
    Buttons
    ══════════════════════════════════════════════════ */
 .btn-primary {
-    background: #CC0000;
-    color: #fff;
+    background: var(--color-red);
+    color: var(--color-white);
     border: none;
     padding: 10px 24px;
     font-size: 14px;
@@ -1017,12 +1017,12 @@ body {
     font-weight: bold;
 }
 .btn-primary:hover {
-    background: #990000;
+    background: var(--color-red-dim);
 }
 .btn-secondary {
-    background: #333;
-    color: #fff;
-    border: 1px solid #4D4D4D;
+    background: var(--color-grey-20);
+    color: var(--color-white);
+    border: 1px solid var(--color-grey-30);
     padding: 10px 24px;
     font-size: 14px;
     cursor: pointer;
@@ -1031,7 +1031,7 @@ body {
     letter-spacing: 1px;
 }
 .btn-secondary:hover {
-    background: #4D4D4D;
+    background: var(--color-grey-30);
 }
 .form-actions {
     display: flex;
@@ -1044,21 +1044,21 @@ body {
    Settings Card
    ══════════════════════════════════════════════════ */
 .settings-card {
-    background: #1A1A1A;
-    border: 1px solid #333;
+    background: var(--color-grey-10);
+    border: 1px solid var(--color-grey-20);
     padding: 20px;
     margin-bottom: 16px;
 }
 .settings-card h3 {
     font-size: 16px;
-    color: #CC0000;
+    color: var(--color-red);
     margin: 0 0 16px;
     text-transform: uppercase;
     letter-spacing: 2px;
 }
 .settings-card label {
     display: block;
-    color: #B3B3B3;
+    color: var(--color-grey-70);
     font-size: 14px;
     margin-bottom: 12px;
     text-transform: uppercase;
@@ -1070,16 +1070,16 @@ body {
     display: block;
     width: 100%;
     margin-top: 4px;
-    background: #000;
-    border: 1px solid #4D4D4D;
-    color: #fff;
+    background: var(--color-black);
+    border: 1px solid var(--color-grey-30);
+    color: var(--color-white);
     padding: 8px 12px;
     font-size: 14px;
     border-radius: 0;
     box-sizing: border-box;
 }
 .settings-card input:focus {
-    border-color: #CC0000;
+    border-color: var(--color-red);
     outline: none;
 }
 .settings-card input[type=checkbox] {
@@ -1091,8 +1091,8 @@ body {
    Device Cards
    ══════════════════════════════════════════════════ */
 .device-card {
-    background: #1A1A1A;
-    border: 1px solid #333;
+    background: var(--color-grey-10);
+    border: 1px solid var(--color-grey-20);
     padding: 16px;
     margin-bottom: 8px;
     display: flex;
@@ -1100,19 +1100,19 @@ body {
     justify-content: space-between;
 }
 .device-card:hover {
-    border-color: #CC0000;
+    border-color: var(--color-red);
 }
 .device-info {
     flex: 1;
 }
 .device-name {
     font-size: 16px;
-    color: #fff;
+    color: var(--color-white);
     font-weight: bold;
 }
 .device-host {
     font-size: 14px;
-    color: #808080;
+    color: var(--color-grey-50);
     font-family: JetBrains Mono, monospace;
 }
 .device-status {
@@ -1120,10 +1120,10 @@ body {
     width: 10px;
     height: 10px;
     margin-right: 8px;
-    background: #4D4D4D;
+    background: var(--color-grey-30);
 }
 .device-status.online {
-    background: #2D8A2D;
+    background: var(--color-green);
 }
 .device-actions {
     display: flex;
@@ -1132,7 +1132,7 @@ body {
 #device-list-empty {
     text-align: center;
     padding: 40px;
-    color: #808080;
+    color: var(--color-grey-50);
     font-size: 16px;
 }
 
@@ -1149,19 +1149,19 @@ body {
     gap: 8px;
 }
 .toast {
-    background: #000;
-    border: 1px solid #CC0000;
-    color: #fff;
+    background: var(--color-black);
+    border: 1px solid var(--color-red);
+    color: var(--color-white);
     padding: 12px 20px;
     font-size: 14px;
     min-width: 250px;
     animation: toast-in 0.3s ease;
 }
 .toast.success {
-    border-color: #2D8A2A;
+    border-color: var(--color-green);
 }
 .toast.info {
-    border-color: #4D4D4D;
+    border-color: var(--color-grey-30);
 }
 @keyframes toast-in {
     from {
@@ -1181,8 +1181,8 @@ body {
     display: inline-block;
     width: 24px;
     height: 24px;
-    border: 2px solid #4D4D4D;
-    border-top-color: #CC0000;
+    border: 2px solid var(--color-grey-30);
+    border-top-color: var(--color-red);
     animation: spin 0.8s steps(4) infinite;
 }
 @keyframes spin {
@@ -1197,7 +1197,7 @@ body {
 .empty-state {
     text-align: center;
     padding: 60px 20px;
-    color: #808080;
+    color: var(--color-grey-50);
 }
 .empty-state .icon {
     font-size: 48px;

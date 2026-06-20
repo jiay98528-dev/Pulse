@@ -236,117 +236,45 @@ function updateSystemData(data) {
 // ── Deepseek Data Update ─────────────────────────────
 function updateDeepseekData(data) {
     if (!data) return;
-
-    // Check if API is not configured
     if (data.needs_config) {
         $('#todayTokens').textContent = '未配置';
         $('#accountBalance').textContent = '—';
         $('#todayCost').textContent = '—';
         return;
     }
-
-    // ── Balance ─
+    // Balance
     const balance = data.balance;
     if (balance) {
         const bal = Number(balance.balance) || 0;
+        const granted = Number(balance.granted_balance) || 0;
+        const toppedUp = Number(balance.topped_up_balance) || 0;
         const currency = balance.currency || 'CNY';
-        $('#accountBalance').textContent = (currency === 'CNY' ? '¥' : '$') + bal.toFixed(2);
+        const sym = currency === 'CNY' ? '¥' : '$';
+        $('#accountBalance').textContent = sym + bal.toFixed(2);
+        // Show breakdown in kpi-meta
+        const balanceEl = $('#accountBalance');
+        if (balanceEl) {
+            const heroKpi = balanceEl.closest('.hero-kpi');
+            if (heroKpi) {
+                const metaEl = heroKpi.querySelector('.kpi-meta');
+                if (metaEl) {
+                    metaEl.innerHTML = '<span>赠金: <strong>' + sym + granted.toFixed(2) + '</strong></span>' +
+                        '<span>充值: <strong>' + sym + toppedUp.toFixed(2) + '</strong></span>';
+                }
+            }
+        }
     }
-
-    // ── Today Summary ─
-    const today = data.today || {};
-    const week = data.week || {};
-    const month = data.month || {};
-
-    const totalTokens = Number(today.total_tokens) || 0;
-    const inputTokens = Number(today.input_tokens) || 0;
-    const outputTokens = Number(today.output_tokens) || 0;
-    const cachedTokens = Number(today.cached_tokens) || 0;
-    const todayCost = Number(today.total_cost) || 0;
-    const weekCost = Number(week.total_cost) || 0;
-    const monthCost = Number(month.total_cost) || 0;
-
-    $('#todayTokens').textContent = formatNumber(totalTokens);
-    $('#todayInput').textContent = formatNumber(inputTokens);
-    $('#todayOutput').textContent = formatNumber(outputTokens);
-    $('#todayCached').textContent = formatNumber(cachedTokens);
-    $('#todayCost').textContent = formatCurrency(todayCost);
-    $('#monthCost').textContent = formatCurrency(monthCost);
-    $('#weekCost').textContent = formatCurrency(weekCost);
-
-    // Cache hit rate
-    const cacheRate = totalTokens > 0 ? ((cachedTokens / totalTokens) * 100) : 0;
-    $('#cacheRate').textContent = cacheRate.toFixed(1) + '%';
-
-    // ── Token Trend ─
-    let trendUp = true;
-    // Compare with previous day (if we have history)
-    if (state.tokenHistory.length > 1) {
-        const prev = state.tokenHistory[state.tokenHistory.length - 2]?.total || 0;
-        const curr = totalTokens;
-        trendUp = curr >= prev;
-    }
-    const trendEl = $('#tokenTrend').querySelector('.trend-value');
-    if (trendEl) {
-        trendEl.textContent = trendUp ? '▲ +' : '▼ ';
-        trendEl.className = 'trend-value' + (trendUp ? '' : ' down');
-    }
-
-    // ── Spending Limit ─
-    const limits = data.limits || {};
-    const dailyLimit = Number(limits.daily) || 0;
-    const overDaily = data.over_limit_daily || false;
-
-    if (dailyLimit > 0) {
-        const pct = Math.min((todayCost / dailyLimit) * 100, 100);
-        const fill = $('#costLimitFill');
-        fill.style.width = pct + '%';
-        fill.className = 'limit-bar-fill' + (overDaily ? ' danger' : (pct > 80 ? ' warning' : ''));
-        $('#costLimitLabel').textContent = '限额 ¥' + dailyLimit.toFixed(2) + ' | ' + pct.toFixed(0) + '%';
-    }
-
-    // ── Over-limit Alert ─
-    const alertBar = $('#limitAlert');
-    const alertText = $('#limitAlertText');
-    if (overDaily) {
-        alertBar.classList.remove('hidden');
-        alertText.textContent = '⚠ 消费超出每日限额！今日已用 ¥' + todayCost.toFixed(2) + ' / ¥' + dailyLimit.toFixed(2);
-        // Pulse the cost card
-        $('#costCard').style.borderColor = '#CC0000';
-    } else {
-        alertBar.classList.add('hidden');
-        $('#costCard').style.borderColor = '';
-    }
-
-    // ── Model Breakdown ─
-    const modelBreakdown = data.model_breakdown || [];
-    const modelList = $('#modelList');
-    if (modelBreakdown.length > 0) {
-        $('#activeModels').textContent = modelBreakdown.length;
-        modelList.innerHTML = modelBreakdown.slice(0, 3).map(m =>
-            '<span>' + m.model + ': ' + formatNumber(m.total_tokens) + '</span>'
-        ).join(' · ');
-    } else {
-        $('#activeModels').textContent = '0';
-        modelList.textContent = '暂无数据';
-    }
-
-    // Update model breakdown chart
-    updateDeepseekWithModelData(data);
-
-    // ── Save History ─
-    const history7d = data.history_7d || [];
-    if (history7d.length > 0) {
-        state.tokenHistory = history7d;
-    }
-
-    const costHist = data.balance_history || [];
-    if (costHist.length > 0) {
-        state.costHistory = costHist;
-    }
-
-    // Update charts
-    updateDeepseekCharts();
+    // Keep token/cost cards showing placeholder (no auto-collected data anymore)
+    $('#todayTokens').textContent = '—';
+    $('#todayInput').textContent = '—';
+    $('#todayOutput').textContent = '—';
+    $('#todayCached').textContent = '—';
+    $('#todayCost').textContent = '—';
+    $('#monthCost').textContent = '—';
+    $('#weekCost').textContent = '—';
+    $('#cacheRate').textContent = '—';
+    $('#activeModels').textContent = '—';
+    $('#modelList').textContent = '导入CSV后显示';
 }
 
 // ── Chart Initialization ────────────────────────────
@@ -1066,8 +994,11 @@ function initTitleBar() {
     }
   };
   document.getElementById("titlebar-close").onclick = function() {
-    if (window.__TAURI__) { window.__TAURI__.process.exit(0); }
-    else if (confirm("Close Pulse?")) window.close();
+    if (window.__TAURI__) {
+      window.__TAURI__.window.getCurrent().hide();
+    } else {
+      if (confirm("Close Pulse?")) window.close();
+    }
   };
   document.body.classList.add("has-titlebar");
 }
@@ -1243,8 +1174,10 @@ function initPhase45() {
   initAutostartToggle();
   initDeviceForm();
   checkFirstRun();
-  var devicesTab = document.querySelector("[data-tab=devices]");
-  if (devicesTab) devicesTab.onclick = function() { setTimeout(loadDevices, 100); };
+  var hardwareTab = document.querySelector("[data-tab=hardware]");
+  if (hardwareTab) {
+    hardwareTab.addEventListener('click', function() { setTimeout(loadDevices, 100); });
+  }
   if (!document.getElementById("toast-container")) {
     var tc = document.createElement("div");
     tc.id = "toast-container";

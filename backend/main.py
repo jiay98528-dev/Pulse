@@ -15,8 +15,7 @@ import pandas as pd
 from config import load_config, save_config, is_configured
 from database import (
     init_db, save_usage_records, save_balance,
-    get_usage_history, get_usage_summary, get_model_breakdown,
-    get_balance_history, import_csv_data,
+    import_csv_data,
     get_devices, get_device, add_device, update_device, delete_device
 )
 from collectors.system import collect_all as collect_system_data
@@ -69,7 +68,6 @@ connected_clients: set[WebSocket] = set()
 latest_system_data = {}
 latest_deepseek_data = {
     "balance": None,
-    "usage": [],
     "timestamp": None
 }
 daily_usage_cache = {}
@@ -140,67 +138,40 @@ async def collect_system_loop():
 
 
 async def collect_deepseek_loop():
-    """Collect Deepseek API data every 30 seconds and broadcast."""
+    """Collect Deepseek balance every 30 seconds and broadcast.
+    v2.0: usage tracking moved to manual CSV import (M3)."""
     while True:
         try:
             if deepseek.is_ready():
                 result = await deepseek.fetch_all()
 
-                # Save to database
+                # Save balance to database
                 if result.get("balance"):
                     await save_balance(
                         result["balance"]["balance"],
                         result["balance"].get("currency", "CNY")
                     )
 
-                if result.get("usage"):
-                    await save_usage_records(result["usage"])
-
                 global latest_deepseek_data
                 latest_deepseek_data = result
 
-                # Build comprehensive message
                 limits = get_daily_limit()
-                today_summary = await get_usage_summary(days=1)
-                week_summary = await get_usage_summary(days=7)
-                month_summary = await get_usage_summary(days=30)
-                model_breakdown = await get_model_breakdown(days=1)
-                history_7d = await get_usage_history(days=7)
-                balance_history = await get_balance_history(days=30)
-
                 msg_data = {
                     "type": "deepseek",
                     "data": {
                         "balance": result.get("balance"),
-                        "usage": result.get("usage", []),
                         "timestamp": result.get("timestamp"),
                         "limits": limits,
-                        "today": today_summary,
-                        "week": week_summary,
-                        "month": month_summary,
-                        "model_breakdown": model_breakdown,
-                        "history_7d": history_7d,
-                        "balance_history": balance_history,
-                        "over_limit_daily": (
-                            float(today_summary.get("total_cost", 0)) > limits["daily"]
-                            if limits["daily"] > 0 else False
-                        ),
-                        "over_limit_monthly": (
-                            float(month_summary.get("total_cost", 0)) > limits["monthly"]
-                            if limits["monthly"] > 0 else False
-                        ),
                     }
                 }
                 await broadcast(json.dumps(msg_data, default=str))
             else:
-                # Broadcast config-needed status
                 await broadcast(json.dumps({
                     "type": "deepseek",
                     "data": {
                         "error": "API not configured",
                         "needs_config": True,
                         "balance": None,
-                        "usage": [],
                         "timestamp": datetime.now(timezone.utc).isoformat()
                     }
                 }))
@@ -262,35 +233,6 @@ async def api_status():
 
 
 startup_time = datetime.now(timezone.utc)
-
-
-@app.get("/api/deepseek/summary")
-async def api_deepseek_summary():
-    """Get Deepseek usage summary for today, week, month."""
-    today = await get_usage_summary(1)
-    week = await get_usage_summary(7)
-    month = await get_usage_summary(30)
-    model_brk = await get_model_breakdown(1)
-    limits = get_daily_limit()
-    return {
-        "today": today,
-        "week": week,
-        "month": month,
-        "model_breakdown": model_brk,
-        "limits": limits,
-        "over_limit_daily": (
-            float(today.get("total_cost", 0)) > limits["daily"]
-            if limits["daily"] > 0 else False
-        ),
-    }
-
-
-@app.get("/api/deepseek/history")
-async def api_deepseek_history(days: int = 30, model: Optional[str] = None):
-    """Get historical usage data."""
-    history = await get_usage_history(days=days, model=model)
-    balance_hist = await get_balance_history(days=days)
-    return {"usage": history, "balance_history": balance_hist}
 
 
 @app.post("/api/config")

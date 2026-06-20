@@ -32,10 +32,10 @@
         </div>
         <nav class="header-nav" id="mainNav">
             <button class="tab-btn active" data-tab="dashboard">仪表盘</button>
-            <button class="tab-btn" data-tab="system">系统</button>
-            <button class="tab-btn" data-tab="history">历史</button>
-            <button class="tab-btn" data-tab="devices">DEVICES</button>
-            <button class="tab-btn" data-tab="settings">SETTINGS</button>
+            <button class="tab-btn" data-tab="hardware">硬件</button>
+            <button class="tab-btn" data-tab="analysis">分析</button>
+            <button class="tab-btn" data-tab="settings">配置</button>
+            <button class="tab-btn" data-tab="plugins">插件</button>
         </nav>
         <div class="header-status">
             <span class="conn-status" id="connStatus">●</span>
@@ -177,8 +177,8 @@
             </div>
         </section>
 
-        <!-- ─── TAB: SYSTEM ─── -->
-        <section class="tab-content" id="tab-system">
+        <!-- ─── TAB: HARDWARE ─── -->
+        <section class="tab-content" id="tab-hardware">
             <div class="system-grid">
                 <div class="card chart-wide">
                     <div class="card-header">CPU & 内存实时趋势</div>
@@ -208,10 +208,20 @@
                     </div>
                 </div>
             </div>
+
+            <!-- LAN Devices placeholder (M5 will populate) -->
+            <div class="card" style="margin-top: var(--space-2);">
+                <div class="card-header">局域网设备</div>
+                <div id="device-list"></div>
+                <div id="device-list-empty" class="empty-state">
+                    <div class="icon">⚡</div>
+                    <div class="text">暂无设备 · 插件页面启用 LAN 监控后显示</div>
+                </div>
+            </div>
         </section>
 
-        <!-- ─── TAB: HISTORY ─── -->
-        <section class="tab-content" id="tab-history">
+        <!-- ─── TAB: ANALYSIS ─── -->
+        <section class="tab-content" id="tab-analysis">
             <div class="history-grid">
                 <div class="card chart-wide">
                     <div class="card-header">Token 历史趋势 (30日)</div>
@@ -239,34 +249,9 @@
             </div>
         </section>
 
-        <!-- ─── TAB: DEVICES ─── -->
-        <section id="tab-devices" class="tab-content">
-            <div class="tab-header"><h2>DEVICES</h2><button id="device-add-btn" class="btn-primary">+ ADD DEVICE</button></div>
-            <div id="device-list"></div>
-            <div id="device-form-overlay" class="overlay hidden">
-                <div class="overlay-content">
-                    <h3>DEVICE CONFIG</h3>
-                    <form id="device-form">
-                        <input type="hidden" id="device-id">
-                        <label>Name <input type="text" id="device-name" required></label>
-                        <label>Host/IP <input type="text" id="device-host" required></label>
-                        <label>Username <input type="text" id="device-username"></label>
-                        <label>Password <input type="password" id="device-password"></label>
-                        <label>Port <input type="number" id="device-port" value="135"></label>
-                        <label><input type="checkbox" id="device-enabled" checked> Enabled</label>
-                        <div class="form-actions">
-                            <button type="button" id="device-test-btn" class="btn-secondary">TEST</button>
-                            <button type="submit" class="btn-primary">SAVE</button>
-                            <button type="button" id="device-form-cancel" class="btn-secondary">CANCEL</button>
-                        </div>
-                    </form>
-                </div>
-            </div>
-        </section>
-
         <!-- ─── TAB: SETTINGS ─── -->
         <section id="tab-settings" class="tab-content">
-            <div class="tab-header"><h2>SETTINGS</h2></div>
+            <div class="tab-header"><h2>配置</h2></div>
             <div class="settings-card">
                 <h3>Deepseek API</h3>
                 <form id="settings-form">
@@ -280,6 +265,17 @@
             <div class="settings-card">
                 <h3>System</h3>
                 <label><input type="checkbox" id="settings-autostart"> Auto Start on Boot</label>
+            </div>
+        </section>
+
+        <!-- ─── TAB: PLUGINS ─── -->
+        <section class="tab-content" id="tab-plugins">
+            <div class="card">
+                <div class="card-header red">插件管理</div>
+                <div class="empty-state">
+                    <div class="icon">🔌</div>
+                    <div class="text">插件系统即将推出 · 敬请期待</div>
+                </div>
             </div>
         </section>
 

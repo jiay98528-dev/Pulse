@@ -106,13 +106,11 @@ pub fn run() {
             spawn_backend(app);
 
             // --- System Tray ---
-            let show_hide = MenuItemBuilder::with_id("show_hide", "Show/Hide").build(app)?;
-            let dashboard = MenuItemBuilder::with_id("dashboard", "Dashboard").build(app)?;
-            let quit = MenuItemBuilder::with_id("quit", "Quit").build(app)?;
+            let show = MenuItemBuilder::with_id("show", "显示主窗口").build(app)?;
+            let quit = MenuItemBuilder::with_id("quit", "退出 Pulse").build(app)?;
 
             let menu = MenuBuilder::new(app)
-                .item(&show_hide)
-                .item(&dashboard)
+                .item(&show)
                 .separator()
                 .item(&quit)
                 .build()?;
@@ -126,18 +124,24 @@ pub fn run() {
                 .tooltip("Pulse Dashboard")
                 .on_menu_event(|app, event| {
                     match event.id().as_ref() {
-                        "show_hide" => {
+                        "show" => {
                             if let Some(window) = app.get_webview_window("main") {
-                                if window.is_visible().unwrap_or(false) {
-                                    let _ = window.hide();
-                                } else {
-                                    let _ = window.show();
-                                    let _ = window.set_focus();
-                                }
+                                let _ = window.show();
+                                let _ = window.set_focus();
                             }
                         }
-                        "dashboard" => open_url("http://localhost:8080"),
-                        "quit" => app.exit(0),
+                        "quit" => {
+                            // Clean up backend before exit
+                            if let Some(state) = app.try_state::<BackendProcess>() {
+                                if let Ok(mut guard) = state.0.lock() {
+                                    if let Some(mut child) = guard.take() {
+                                        let _ = child.kill();
+                                        let _ = child.wait();
+                                    }
+                                }
+                            }
+                            app.exit(0);
+                        }
                         _ => {}
                     }
                 })
@@ -146,12 +150,8 @@ pub fn run() {
                         if button == MouseButton::Left {
                             if let Some(app) = tray.app_handle() {
                                 if let Some(window) = app.get_webview_window("main") {
-                                    if window.is_visible().unwrap_or(false) {
-                                        let _ = window.hide();
-                                    } else {
-                                        let _ = window.show();
-                                        let _ = window.set_focus();
-                                    }
+                                    let _ = window.show();
+                                    let _ = window.set_focus();
                                 }
                             }
                         }
@@ -162,17 +162,27 @@ pub fn run() {
             Ok(())
         })
         .on_event(|app_handle, event| {
-            if let tauri::RunEvent::Exit = event {
-                if let Some(state) = app_handle.try_state::<BackendProcess>() {
-                    if let Ok(mut guard) = state.0.lock() {
-                        // Take the child out so it is killed only once
-                        if let Some(mut child) = guard.take() {
-                            let _ = child.kill();
-                            let _ = child.wait();
-                            println!("[Pulse] Backend process terminated");
+            match event {
+                tauri::RunEvent::CloseRequested { api, .. } => {
+                    // Hide window to tray instead of closing
+                    if let Some(window) = app_handle.get_webview_window("main") {
+                        let _ = window.hide();
+                    }
+                    api.prevent_close();
+                }
+                tauri::RunEvent::Exit => {
+                    if let Some(state) = app_handle.try_state::<BackendProcess>() {
+                        if let Ok(mut guard) = state.0.lock() {
+                            // Take the child out so it is killed only once
+                            if let Some(mut child) = guard.take() {
+                                let _ = child.kill();
+                                let _ = child.wait();
+                                println!("[Pulse] Backend process terminated");
+                            }
                         }
                     }
                 }
+                _ => {}
             }
         })
         .run(tauri::generate_context!())
