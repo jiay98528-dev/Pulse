@@ -409,11 +409,17 @@
                 </div>
             </div>
 
-            <!-- 系统 (默认隐藏, M5完成后启用) -->
+            <!-- 系统 (LAN 启用时自动显示) -->
             <div class="settings-card hidden" id="settings-system">
                 <div class="card-header red">系统 [LAN]</div>
                 <label><input type="checkbox" id="settings-autostart"> 开机自动启动 Pulse</label>
-                <label><input type="checkbox" id="settings-autoreconnect" disabled> 启动后自动连接主控端 <span class="hint">(需 LAN 插件)</span></label>
+                <label><input type="checkbox" id="settings-autoreconnect" disabled> 启动后自动连接主控端 <span class="hint">(需已配对设备)</span></label>
+                <div class="reconnect-options" id="settings-reconnect-options" style="margin-top:8px;margin-left:24px;">
+                    <label>重试间隔 <input type="number" id="settings-reconnect-interval" value="30" min="10" max="300" style="width:80px;display:inline-block;margin-left:8px;"> 秒</label>
+                </div>
+                <div class="form-actions">
+                    <span class="hint" id="settings-lan-status">LAN 插件状态检查中...</span>
+                </div>
             </div>
 
             <!-- 关于 -->

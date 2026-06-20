@@ -2339,7 +2339,7 @@ async function loadConfig() {
         var monthlyEl = $('#settings-monthly-limit');
         if (monthlyEl) monthlyEl.value = cfg.monthly_spending_limit || 100;
 
-        updateSystemCardVisibility();
+        await updateSystemCardVisibility();
     } catch (e) {
         console.warn('Failed to load config:', e);
     }
@@ -2368,10 +2368,69 @@ function updateVendorConfig(vendor) {
     }
 }
 
-// System card visibility (hidden until M5)
-function updateSystemCardVisibility() {
+// System card visibility — LAN 插件启用时自动显示
+async function updateSystemCardVisibility() {
     var card = $('#settings-system');
-    if (card) card.classList.add('hidden');
+    var statusEl = $('#settings-lan-status');
+    if (!card) return;
+
+    try {
+        var resp = await fetch('/api/plugins');
+        var data = await resp.json();
+        var lanEnabled = false;
+
+        // 检查 LAN 插件是否启用
+        if (Array.isArray(data)) {
+            for (var i = 0; i < data.length; i++) {
+                if (data[i].name === 'LAN 设备监控' && data[i].enabled) {
+                    lanEnabled = true;
+                    break;
+                }
+            }
+        } else if (data.plugins && Array.isArray(data.plugins)) {
+            for (var i = 0; i < data.plugins.length; i++) {
+                if (data.plugins[i].name === 'LAN 设备监控' && data.plugins[i].enabled) {
+                    lanEnabled = true;
+                    break;
+                }
+            }
+        }
+
+        if (lanEnabled) {
+            card.classList.remove('hidden');
+
+            // 检查是否有已配对设备
+            try {
+                var devResp = await fetch('/api/lan/devices');
+                var devices = devResp.ok ? await devResp.json() : [];
+                var hasPaired = Array.isArray(devices) && devices.length > 0;
+
+                var reconnectCb = $('#settings-autoreconnect');
+                if (reconnectCb) {
+                    reconnectCb.disabled = !hasPaired;
+                    if (!hasPaired) {
+                        reconnectCb.checked = false;
+                        localStorage.removeItem('pulse-autoreconnect');
+                    }
+                }
+
+                if (statusEl) {
+                    statusEl.textContent = hasPaired
+                        ? 'LAN 插件运行中 · ' + devices.length + ' 台设备已配对'
+                        : 'LAN 插件运行中 · 暂无配对设备，自动重连不可用';
+                }
+            } catch (e) {
+                if (statusEl) statusEl.textContent = 'LAN 插件运行中';
+            }
+        } else {
+            card.classList.add('hidden');
+            if (statusEl) statusEl.textContent = 'LAN 插件未启用';
+        }
+    } catch (e) {
+        // API 不可用（纯前端模式或无路由）
+        card.classList.add('hidden');
+        if (statusEl) statusEl.textContent = 'LAN 插件状态未知';
+    }
 }
 
 // Settings save handler
@@ -2573,14 +2632,94 @@ function initSettingsForm() {
   };
 }
 
-// --- Autostart Toggle ---
+// --- Autostart Toggle (localStorage fallback, Tauri API when available) ---
 function initAutostartToggle() {
   var cb = document.getElementById("settings-autostart");
   if (!cb) return;
+
+  // Restore saved state
+  var saved = localStorage.getItem('pulse-autostart');
+  if (saved === 'true') cb.checked = true;
+  if (saved === 'false') cb.checked = false;
+
   cb.onchange = function() {
-    if (cb.checked) showToast("Auto-start enabled","info");
-    else showToast("Auto-start disabled","info");
+    var enabled = cb.checked;
+    localStorage.setItem('pulse-autostart', enabled ? 'true' : 'false');
+
+    // Try Tauri autostart API
+    if (window.__TAURI__ && window.__TAURI__.autostart) {
+      if (enabled) {
+        window.__TAURI__.autostart.enable().catch(function(e) {
+          console.warn('[Autostart] Tauri enable failed:', e);
+        });
+      } else {
+        window.__TAURI__.autostart.disable().catch(function(e) {
+          console.warn('[Autostart] Tauri disable failed:', e);
+        });
+      }
+    }
+
+    showToast(enabled ? '✓ 开机自启已启用' : '开机自启已禁用', 'info');
   };
+}
+
+// --- Auto-reconnect Toggle ---
+function initAutoReconnectToggle() {
+  var cb = document.getElementById("settings-autoreconnect");
+  var intervalInput = document.getElementById("settings-reconnect-interval");
+  if (!cb) return;
+
+  // Restore saved state
+  var saved = localStorage.getItem('pulse-autoreconnect');
+  if (saved === 'true') cb.checked = true;
+
+  var savedInterval = localStorage.getItem('pulse-reconnect-interval');
+  if (savedInterval && intervalInput) {
+    intervalInput.value = savedInterval;
+  }
+
+  cb.onchange = function() {
+    var enabled = cb.checked;
+    localStorage.setItem('pulse-autoreconnect', enabled ? 'true' : 'false');
+    showToast(enabled ? '✓ 自动重连已启用' : '自动重连已禁用', 'info');
+
+    // Notify backend to start/stop reconnect loop
+    if (enabled) {
+      fetch('/api/lan/reconnect/start', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ interval: parseInt(intervalInput ? intervalInput.value : '30', 10) || 30 }),
+      }).catch(function(e) {
+        console.warn('[Reconnect] Backend start failed:', e);
+      });
+    } else {
+      fetch('/api/lan/reconnect/stop', { method: 'POST' }).catch(function(e) {
+        console.warn('[Reconnect] Backend stop failed:', e);
+      });
+    }
+  };
+
+  // Interval change — save to localStorage
+  if (intervalInput) {
+    intervalInput.addEventListener('change', function() {
+      var val = parseInt(this.value, 10);
+      if (isNaN(val) || val < 10) val = 10;
+      if (val > 300) val = 300;
+      this.value = val;
+      localStorage.setItem('pulse-reconnect-interval', String(val));
+
+      // Notify backend of interval change
+      if (cb.checked) {
+        fetch('/api/lan/reconnect/interval', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({ interval: val }),
+        }).catch(function(e) {
+          console.warn('[Reconnect] Interval update failed:', e);
+        });
+      }
+    });
+  }
 }
 
 // --- Devices ---
@@ -2661,6 +2800,7 @@ function initPhase45() {
   initSetupForm();
   initSettingsForm();
   initAutostartToggle();
+  initAutoReconnectToggle();
   initDeviceForm();
   checkFirstRun();
   var hardwareTab = document.querySelector("[data-tab=hardware]");

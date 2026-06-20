@@ -11,6 +11,7 @@ from plugins.lan_monitor.discovery import (
     send_discovery_broadcast,
 )
 from plugins.lan_monitor.pairing import PairingManager
+from plugins.lan_monitor.reconnect import ReconnectManager
 
 
 class LANMonitorPlugin(PluginBase):
@@ -24,6 +25,8 @@ class LANMonitorPlugin(PluginBase):
         self._running = False
         self._discovery_transport = None
         self._discovery_protocol = None
+        self._reconnect_manager = None
+        self._reconnect_task = None
         self.device_name = None  # Will be set from config
 
     async def start(self):
@@ -36,15 +39,37 @@ class LANMonitorPlugin(PluginBase):
             print("[Plugin LAN] 注意: UDP 发现监听器未启动（端口可能被占用）")
             print("[Plugin LAN] 配对仍可通过手动添加设备 API 完成")
 
+        # Start reconnect manager if configured
+        await self._maybe_start_reconnect()
+
         print("[Plugin LAN] 设备监控 started")
 
     async def stop(self):
         """Stop background monitoring loop and discovery listener."""
         self._running = False
 
+        # Stop reconnect manager
+        await self._maybe_stop_reconnect()
+
         await stop_discovery_listener(self)
 
         print("[Plugin LAN] 设备监控 stopped")
+
+    async def _maybe_start_reconnect(self):
+        """Start reconnect manager if DB is available and auto-reconnect is desired."""
+        if self._reconnect_manager is not None:
+            try:
+                await self._reconnect_manager.start_reconnect_loop(interval=30)
+            except Exception as e:
+                print(f"[Plugin LAN] 重连管理器启动失败: {e}")
+
+    async def _maybe_stop_reconnect(self):
+        """Stop reconnect manager if running."""
+        if self._reconnect_manager is not None:
+            try:
+                await self._reconnect_manager.stop()
+            except Exception:
+                pass
 
     async def get_status(self):
         return {
@@ -91,3 +116,10 @@ class LANMonitorPlugin(PluginBase):
         if not hasattr(self, "_pairing_manager") or self._pairing_manager is None:
             self._pairing_manager = PairingManager(db)
         return self._pairing_manager
+
+    async def get_reconnect_manager(self, db=None) -> ReconnectManager:
+        """Get (or create) a ReconnectManager instance bound to this plugin."""
+        if self._reconnect_manager is None:
+            from plugins.lan_monitor.reconnect import ReconnectManager
+            self._reconnect_manager = ReconnectManager(db)
+        return self._reconnect_manager

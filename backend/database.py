@@ -71,6 +71,18 @@ async def init_db():
                 FOREIGN KEY (device_id) REFERENCES lan_devices(id)
             )
         """)
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS lan_paired_devices (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                device_id TEXT NOT NULL UNIQUE,
+                name TEXT NOT NULL,
+                ip TEXT NOT NULL,
+                shared_metrics TEXT DEFAULT 'cpu,memory,disk,network',
+                persistent_trust INTEGER DEFAULT 0,
+                token TEXT DEFAULT '',
+                created_at TEXT NOT NULL
+            )
+        """)
         await init_devices_table()
         await db.execute("""
             CREATE INDEX IF NOT EXISTS idx_usage_timestamp
@@ -357,3 +369,86 @@ async def save_lan_snapshot(device_id: int, data: dict) -> int:
         )
         await db.commit()
         return cursor.lastrowid or 0
+
+
+# ── LAN Paired Devices ────────────────────────────────
+
+
+async def add_lan_paired_device(device_id: str, name: str, ip: str,
+                                shared_metrics: str = "cpu,memory,disk,network",
+                                persistent_trust: int = 0,
+                                token: str = "") -> int:
+    """Add a new paired LAN device. Returns the new row id."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        now = datetime.now(timezone.utc).isoformat()
+        cursor = await db.execute(
+            """INSERT OR REPLACE INTO lan_paired_devices
+               (device_id, name, ip, shared_metrics, persistent_trust, token, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            (device_id, name, ip, shared_metrics, persistent_trust, token, now)
+        )
+        await db.commit()
+        return cursor.lastrowid or 0
+
+
+async def get_lan_paired_devices() -> list[dict]:
+    """Get all paired LAN devices."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            "SELECT * FROM lan_paired_devices ORDER BY name ASC"
+        )
+        rows = await cursor.fetchall()
+        return [dict(r) for r in rows]
+
+
+async def find_paired_device_by_ip(ip: str) -> Optional[dict]:
+    """Find a paired device by IP address."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            "SELECT * FROM lan_paired_devices WHERE ip = ?", (ip,)
+        )
+        row = await cursor.fetchone()
+        return dict(row) if row else None
+
+
+async def find_trusted_device_by_ip(ip: str) -> Optional[dict]:
+    """Find a persistent-trust device by IP address."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            "SELECT * FROM lan_paired_devices WHERE ip = ? AND persistent_trust = 1", (ip,)
+        )
+        row = await cursor.fetchone()
+        return dict(row) if row else None
+
+
+async def get_lan_trusted_devices() -> list[dict]:
+    """Get all persistent-trust devices."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            "SELECT * FROM lan_paired_devices WHERE persistent_trust = 1 ORDER BY name ASC"
+        )
+        rows = await cursor.fetchall()
+        return [dict(r) for r in rows]
+
+
+async def delete_lan_paired_device(device_id: int) -> bool:
+    """Remove a paired device by its primary key id. Returns True if a row was deleted."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute("DELETE FROM lan_paired_devices WHERE id = ?", (device_id,))
+        await db.commit()
+        return cursor.rowcount > 0
+
+
+async def update_lan_paired_device_metrics(device_id: int, shared_metrics: str) -> bool:
+    """Update shared_metrics for a paired device."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute(
+            "UPDATE lan_paired_devices SET shared_metrics = ? WHERE id = ?",
+            (shared_metrics, device_id)
+        )
+        await db.commit()
+        return cursor.rowcount > 0

@@ -29,7 +29,7 @@
 | M2 仪表盘 + 硬件 | 6/6 ✅ | 完成 |
 | M3 分析 + 配置 | 7/7 ✅ | 完成 |
 | M4 主题系统 | 6/6 ✅ | 完成 |
-| M5 插件 + LAN | 3/7 | 🚧 进行中 (PluginBase + 插件页UI + LAN横栏完成) |
+| M5 插件 + LAN | 7/7 ✅ | 完成 |
 | M6 商店后端 | 0/5 | ⏳ 待开始 |
 
 ### M1 — 基础重构 (5/5) ✅
@@ -64,14 +64,14 @@
 - [x] 4.5 .pulse-theme 拖入安装 (格式验证 + localStorage缓存 + 刷新列表)
 - [x] 4.6 主题编辑器 — 8色取色器 + 3字体 + 3字号滑块 + 实时预览 + 导出
 
-### M5 — 插件架构 + LAN 插件 (3/7) 🚧
+### M5 — 插件架构 + LAN 插件 (7/7) ✅
 - [x] 5.1 PluginBase 基类 + 插件发现 (PluginManager + 动态导入)
 - [x] 5.2 插件页 UI — 卡片列表 + 开关 (enable/disable REST API)
-- [x] 5.6 硬件页设备横栏 — 水平卡片 + KPI显示 (后端设备API)
-- [ ] 5.3 LAN 插件：UDP 广播发现 (UDP listener skeleton编码完成)
-- [ ] 5.4 LAN 插件：WebSocket 配对 + 弹窗授权 (PairingManager编码完成)
-- [ ] 5.5 LAN 插件：指标选择器 + 持久信任
-- [ ] 5.7 开机自启 + 自动重连主控端
+- [x] 5.3 LAN 插件：UDP 广播发现 (UDP listener + discovery.py)
+- [x] 5.4 LAN 插件：WebSocket 配对 + 弹窗授权 (PairingManager + overlay弹窗)
+- [x] 5.5 LAN 插件：指标选择器 + 持久信任 (PIN验证 + 共享指标开关)
+- [x] 5.6 硬件页设备横栏 — 水平卡片 + KPI显示 + 抽屉详情
+- [x] 5.7 开机自启 + 自动重连主控端 (ReconnectManager + 配置UI)
 
 ### M6 — 商店后端 (0/5)
 - [ ] 6.1 FastAPI 商店 + SQLite 初始化

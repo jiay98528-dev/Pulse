@@ -626,6 +626,64 @@ async def api_lan_pending_requests():
     return {"requests": pm.get_pending_requests()}
 
 
+# ── LAN Reconnect API ──────────────────────────────────────
+
+
+def _get_reconnect_manager():
+    """Get or create the ReconnectManager from the LAN plugin."""
+    lan_plugin = _lan_plugin_check()
+    rm = getattr(lan_plugin, "_reconnect_manager", None)
+    if rm is None:
+        from plugins.lan_monitor.reconnect import ReconnectManager
+        import database as db_mod
+        rm = ReconnectManager(db_mod)
+        rm.set_ws_clients(connected_clients)
+        lan_plugin._reconnect_manager = rm
+    return rm
+
+
+@app.post("/api/lan/reconnect/start")
+async def api_lan_reconnect_start(body: dict):
+    """Start the auto-reconnect loop."""
+    interval = body.get("interval", 30)
+    rm = _get_reconnect_manager()
+    await rm.start_reconnect_loop(interval=interval)
+    return {"status": "ok", "interval": interval}
+
+
+@app.post("/api/lan/reconnect/stop")
+async def api_lan_reconnect_stop():
+    """Stop the auto-reconnect loop."""
+    try:
+        rm = _get_reconnect_manager()
+        await rm.stop()
+    except HTTPException:
+        pass  # Plugin not enabled — nothing to stop
+    return {"status": "ok"}
+
+
+@app.post("/api/lan/reconnect/interval")
+async def api_lan_reconnect_interval(body: dict):
+    """Update the reconnect check interval."""
+    interval = body.get("interval", 30)
+    rm = _get_reconnect_manager()
+    rm.set_interval(interval)
+    return {"status": "ok", "interval": interval}
+
+
+@app.get("/api/lan/reconnect/status")
+async def api_lan_reconnect_status():
+    """Get the reconnect loop status."""
+    try:
+        rm = _get_reconnect_manager()
+    except HTTPException:
+        return {"running": False, "interval": 30}
+    return {
+        "running": rm.is_running(),
+        "interval": rm.get_interval(),
+    }
+
+
 # ── Analysis API (re-imported from original) ──────────────
 
 
