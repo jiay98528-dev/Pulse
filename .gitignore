@@ -10,3 +10,4 @@ src-tauri/target/
 .playwright-mcp/
 audit-*.png
 AGENTS.md
+.claude/worktrees/
