@@ -18,9 +18,6 @@ from database import (
     init_db, save_usage_records, save_balance,
     import_csv_data, get_usage_summary, get_usage_history, get_model_breakdown,
     get_devices, get_device, add_device, update_device, delete_device,
-    get_lan_paired_devices, get_lan_paired_device, add_lan_paired_device,
-    update_lan_paired_device_metrics, delete_lan_paired_device,
-    find_paired_device_by_ip, find_trusted_device_by_ip,
 )
 from collectors.system import collect_all as collect_system_data
 from collectors.deepseek import DeepseekCollector
