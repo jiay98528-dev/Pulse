@@ -33,6 +33,7 @@ const state = {
     maxHistoryPoints: 60,
     charts: {},
     pendingCsvFile: null,
+    analysisState: { days: 30, model: '', currentData: [], compareEnabled: false },
     config: {},
     netHistory: { timestamps: [], recv: [], sent: [] },
     lastDiskData: null,
@@ -1745,6 +1746,454 @@ function updateRealtimeCharts() {
     }
 }
 
+// ── Analysis Tab ───────────────────────────────
+
+async function loadAnalysisData() {
+    const daysEl = $('#filter-days');
+    const modelEl = $('#filter-model');
+    const days = daysEl ? daysEl.value : '30';
+    const model = modelEl ? modelEl.value : '';
+
+    state.analysisState.days = days;
+    state.analysisState.model = model;
+
+    try {
+        const summaryUrl = '/api/analysis/summary?days=' + days;
+        const historyUrl = '/api/analysis/history?days=' + days + '&model=' + encodeURIComponent(model);
+        const modelsUrl = '/api/analysis/models?days=' + days;
+
+        const [summaryResp, historyResp, modelsResp] = await Promise.all([
+            fetch(summaryUrl),
+            fetch(historyUrl),
+            fetch(modelsUrl),
+        ]);
+
+        const summaryData = summaryResp.ok ? await summaryResp.json() : {};
+        const historyData = historyResp.ok ? await historyResp.json() : [];
+        const modelsData = modelsResp.ok ? await modelsResp.json() : [];
+
+        state.analysisState.currentData = historyData;
+
+        updateSummaryCards(summaryData, modelsData);
+        updateCharts(historyData, modelsData);
+        updateDataTable(historyData);
+    } catch (e) {
+        console.warn('[Analysis] Failed to load data:', e);
+    }
+}
+
+function updateSummaryCards(summary, modelsData) {
+    const tokensEl = $('#kpi-total-tokens-val');
+    const costEl = $('#kpi-total-cost-val');
+    const cacheEl = $('#kpi-cache-rate-val');
+    const modelEl = $('#kpi-primary-model-val');
+
+    if (tokensEl) {
+        tokensEl.textContent = (summary.total_tokens && summary.total_tokens > 0)
+            ? formatNumber(summary.total_tokens) : '—';
+    }
+
+    if (costEl) {
+        costEl.textContent = (summary.total_cost !== undefined && summary.total_cost !== null && summary.total_cost > 0)
+            ? '¥' + Number(summary.total_cost).toFixed(2) : '—';
+    }
+
+    if (cacheEl) {
+        if (summary.total_tokens && summary.total_tokens > 0 && summary.total_cached !== undefined) {
+            const rate = (summary.total_cached / summary.total_tokens * 100).toFixed(1);
+            cacheEl.textContent = rate + '%';
+        } else {
+            cacheEl.textContent = '—';
+        }
+    }
+
+    if (modelEl) {
+        if (Array.isArray(modelsData) && modelsData.length > 0) {
+            // Sort by total_tokens descending, pick first
+            var sorted = modelsData.slice().sort(function(a, b) {
+                return (b.total_tokens || 0) - (a.total_tokens || 0);
+            });
+            modelEl.textContent = sorted[0].model || '—';
+        } else {
+            modelEl.textContent = '—';
+        }
+    }
+}
+
+function updateCharts(history, models) {
+    // Aggregate history by date
+    var dailyMap = {};
+    for (var i = 0; i < history.length; i++) {
+        var row = history[i];
+        var date = row.date || row.timestamp || '';
+        date = date.substring(0, 10);
+        if (!dailyMap[date]) {
+            dailyMap[date] = { total: 0, input: 0, cost: 0, count: 0 };
+        }
+        dailyMap[date].total += row.total_tokens || 0;
+        dailyMap[date].input += row.input_tokens || 0;
+        dailyMap[date].cost += row.cost || 0;
+        dailyMap[date].count++;
+    }
+
+    var dates = Object.keys(dailyMap).sort();
+    var totals = dates.map(function(d) { return dailyMap[d].total; });
+    var inputs = dates.map(function(d) { return dailyMap[d].input; });
+    var costs = dates.map(function(d) { return dailyMap[d].cost; });
+
+    // Token Trend chart
+    var tokenChart = state.charts.tokenTrend;
+    if (tokenChart) {
+        tokenChart.data.labels = dates;
+        tokenChart.data.datasets[0].data = totals;
+        tokenChart.data.datasets[1].data = inputs;
+        tokenChart.update('none');
+    }
+
+    // Model Breakdown chart
+    var modelChart = state.charts.modelBreakdown;
+    if (modelChart) {
+        var modelLabels = [];
+        var modelData = [];
+        if (Array.isArray(models) && models.length > 0) {
+            var sortedModels = models.slice().sort(function(a, b) {
+                return (b.total_tokens || 0) - (a.total_tokens || 0);
+            });
+            modelLabels = sortedModels.map(function(m) {
+                var name = m.model || 'unknown';
+                return name.length > 16 ? name.substring(0, 16) + '…' : name;
+            });
+            modelData = sortedModels.map(function(m) { return m.total_tokens || 0; });
+        }
+        modelChart.data.labels = modelLabels;
+        modelChart.data.datasets[0].data = modelData;
+        modelChart.update('none');
+    }
+
+    // Cache Rate chart (doughnut)
+    var cacheChart = state.charts.cacheRate;
+    if (cacheChart) {
+        var totalTokens = 0;
+        var totalCached = 0;
+        for (var j = 0; j < history.length; j++) {
+            totalTokens += history[j].total_tokens || 0;
+            totalCached += history[j].cached_tokens || 0;
+        }
+        if (totalTokens > 0 && totalCached > 0) {
+            cacheChart.data.datasets[0].data = [totalCached, totalTokens - totalCached];
+        } else {
+            cacheChart.data.datasets[0].data = [0, 100];
+        }
+        cacheChart.update('none');
+    }
+
+    // Cost Trend chart
+    var costChart = state.charts.costTrend;
+    if (costChart) {
+        costChart.data.labels = dates;
+        costChart.data.datasets[0].data = costs;
+        costChart.update('none');
+    }
+}
+
+function updateDataTable(rows) {
+    var tbody = $('#analysis-table-body');
+    if (!tbody) return;
+
+    tbody.innerHTML = '';
+
+    if (!rows || rows.length === 0) {
+        var emptyRow = document.createElement('tr');
+        emptyRow.className = 'empty-row';
+        emptyRow.innerHTML = '<td colspan="7">暂无数据 · 导入 CSV 后显示</td>';
+        tbody.appendChild(emptyRow);
+        return;
+    }
+
+    for (var i = 0; i < rows.length; i++) {
+        var r = rows[i];
+        var tr = document.createElement('tr');
+        var date = (r.date || r.timestamp || '').substring(0, 10);
+        var model = r.model || '—';
+        var inputTokens = r.input_tokens || 0;
+        var outputTokens = r.output_tokens || 0;
+        var cachedTokens = r.cached_tokens || 0;
+        var totalTokens = r.total_tokens || 0;
+        var cost = r.cost || 0;
+
+        tr.innerHTML =
+            '<td>' + date + '</td>' +
+            '<td>' + model + '</td>' +
+            '<td class="num">' + formatNumber(inputTokens) + '</td>' +
+            '<td class="num">' + formatNumber(outputTokens) + '</td>' +
+            '<td class="num">' + formatNumber(cachedTokens) + '</td>' +
+            '<td class="num">' + formatNumber(totalTokens) + '</td>' +
+            '<td class="num">' + formatCurrency(cost) + '</td>';
+        tbody.appendChild(tr);
+    }
+}
+
+function handleCompareToggle() {
+    var toggle = $('#compare-toggle');
+    var enabled = toggle ? toggle.checked : false;
+    state.analysisState.compareEnabled = enabled;
+
+    var compareDates = $('#compare-dates');
+    if (compareDates) {
+        compareDates.classList.toggle('hidden', !enabled);
+    }
+
+    if (enabled) {
+        // Set default dates to cover the current filter range
+        var days = state.analysisState.days;
+        var daysNum = parseInt(days, 10);
+        if (isNaN(daysNum) || daysNum < 1) daysNum = 30;
+
+        var now = new Date();
+        var endA = new Date(now);
+        var startA = new Date(now);
+        startA.setDate(startA.getDate() - daysNum);
+
+        var endB = new Date(startA);
+        var startB = new Date(startA);
+        startB.setDate(startB.getDate() - daysNum);
+
+        var fmt = function(d) {
+            var y = d.getFullYear();
+            var m = String(d.getMonth() + 1).padStart(2, '0');
+            var day = String(d.getDate()).padStart(2, '0');
+            return y + '-' + m + '-' + day;
+        };
+
+        var aStart = $('#compare-date-a-start');
+        var aEnd = $('#compare-date-a-end');
+        var bStart = $('#compare-date-b-start');
+        var bEnd = $('#compare-date-b-end');
+        if (aStart) aStart.value = fmt(startA);
+        if (aEnd) aEnd.value = fmt(endA);
+        if (bStart) bStart.value = fmt(startB);
+        if (bEnd) bEnd.value = fmt(endB);
+
+        loadCompareData();
+    } else {
+        loadAnalysisData();
+    }
+}
+
+async function loadCompareData() {
+    var aStart = $('#compare-date-a-start');
+    var aEnd = $('#compare-date-a-end');
+    var bStart = $('#compare-date-b-start');
+    var bEnd = $('#compare-date-b-end');
+    var modelEl = $('#filter-model');
+    var model = modelEl ? modelEl.value : '';
+
+    if (!aStart || !aEnd || !bStart || !bEnd) return;
+
+    var periodA = 'start=' + aStart.value + '&end=' + aEnd.value;
+    var periodB = 'start=' + bStart.value + '&end=' + bEnd.value;
+    var modelParam = model ? '&model=' + encodeURIComponent(model) : '';
+
+    try {
+        const [respA, respB] = await Promise.all([
+            fetch('/api/analysis/history?' + periodA + modelParam),
+            fetch('/api/analysis/history?' + periodB + modelParam),
+        ]);
+
+        var dataA = respA.ok ? await respA.json() : [];
+        var dataB = respB.ok ? await respB.json() : [];
+
+        renderCompareCharts(dataA, dataB);
+    } catch (e) {
+        console.warn('[Analysis] Compare data load failed:', e);
+    }
+}
+
+function renderCompareCharts(dataA, dataB) {
+    // Aggregate both datasets by date
+    function aggregate(data) {
+        var map = {};
+        for (var i = 0; i < data.length; i++) {
+            var date = (data[i].date || data[i].timestamp || '').substring(0, 10);
+            if (!map[date]) map[date] = { total: 0, cost: 0 };
+            map[date].total += data[i].total_tokens || 0;
+            map[date].cost += data[i].cost || 0;
+        }
+        var keys = Object.keys(map).sort();
+        return {
+            labels: keys,
+            totals: keys.map(function(k) { return map[k].total; }),
+            costs: keys.map(function(k) { return map[k].cost; }),
+        };
+    }
+
+    var aggA = aggregate(dataA);
+    var aggB = aggregate(dataB);
+
+    // Token Trend chart — dual datasets
+    var tokenChart = state.charts.tokenTrend;
+    if (tokenChart) {
+        // Merge and sort all unique labels
+        var allLabels = {};
+        for (var i = 0; i < aggA.labels.length; i++) allLabels[aggA.labels[i]] = true;
+        for (var j = 0; j < aggB.labels.length; j++) allLabels[aggB.labels[j]] = true;
+        var sortedLabels = Object.keys(allLabels).sort();
+
+        var dataMapA = {};
+        for (var k = 0; k < aggA.labels.length; k++) {
+            dataMapA[aggA.labels[k]] = aggA.totals[k];
+        }
+        var dataMapB = {};
+        for (var l = 0; l < aggB.labels.length; l++) {
+            dataMapB[aggB.labels[l]] = aggB.totals[l];
+        }
+
+        var seriesA = sortedLabels.map(function(d) { return dataMapA[d] || 0; });
+        var seriesB = sortedLabels.map(function(d) { return dataMapB[d] || 0; });
+
+        tokenChart.data.labels = sortedLabels;
+        tokenChart.data.datasets = [{
+            label: '期间 A',
+            data: seriesA,
+            borderColor: chartColors.red,
+            backgroundColor: 'transparent',
+            borderWidth: 3,
+            tension: 0,
+            pointRadius: 0,
+            pointHoverRadius: 6,
+            fill: false,
+        }, {
+            label: '期间 B',
+            data: seriesB,
+            borderColor: chartColors.white,
+            backgroundColor: 'transparent',
+            borderWidth: 2,
+            tension: 0,
+            pointRadius: 0,
+            pointHoverRadius: 4,
+            borderDash: [4, 4],
+            fill: false,
+        }];
+        tokenChart.update('none');
+    }
+
+    // Cost Trend chart — dual datasets
+    var costChart = state.charts.costTrend;
+    if (costChart) {
+        var allCostLabels = {};
+        for (var m = 0; m < aggA.labels.length; m++) allCostLabels[aggA.labels[m]] = true;
+        for (var n = 0; n < aggB.labels.length; n++) allCostLabels[aggB.labels[n]] = true;
+        var sortedCostLabels = Object.keys(allCostLabels).sort();
+
+        var costMapA = {};
+        for (var p = 0; p < aggA.labels.length; p++) {
+            costMapA[aggA.labels[p]] = aggA.costs[p];
+        }
+        var costMapB = {};
+        for (var q = 0; q < aggB.labels.length; q++) {
+            costMapB[aggB.labels[q]] = aggB.costs[q];
+        }
+
+        var costSeriesA = sortedCostLabels.map(function(d) { return costMapA[d] || 0; });
+        var costSeriesB = sortedCostLabels.map(function(d) { return costMapB[d] || 0; });
+
+        costChart.data.labels = sortedCostLabels;
+        costChart.data.datasets = [{
+            label: '期间 A',
+            data: costSeriesA,
+            borderColor: chartColors.red,
+            backgroundColor: 'transparent',
+            borderWidth: 3,
+            tension: 0,
+            pointRadius: 0,
+            pointHoverRadius: 6,
+            fill: false,
+        }, {
+            label: '期间 B',
+            data: costSeriesB,
+            borderColor: chartColors.white,
+            backgroundColor: 'transparent',
+            borderWidth: 2,
+            tension: 0,
+            pointRadius: 0,
+            pointHoverRadius: 4,
+            borderDash: [4, 4],
+            fill: false,
+        }];
+        costChart.update('none');
+    }
+}
+
+function initAnalysisTab() {
+    // Initialize charts
+    initTokenTrendChart();
+    initModelBreakdownChart();
+    initCacheRateChart();
+    initCostTrendChart();
+
+    // Bind filter changes
+    var filterDays = $('#filter-days');
+    if (filterDays) {
+        filterDays.addEventListener('change', function() {
+            var customGroup = $('#custom-date-group');
+            if (customGroup) {
+                customGroup.classList.toggle('hidden', this.value !== 'custom');
+            }
+            loadAnalysisData();
+        });
+    }
+
+    var filterModel = $('#filter-model');
+    if (filterModel) {
+        filterModel.addEventListener('change', loadAnalysisData);
+    }
+
+    var compareToggle = $('#compare-toggle');
+    if (compareToggle) {
+        compareToggle.addEventListener('change', handleCompareToggle);
+    }
+
+    var compareBtn = $('#compare-load-btn');
+    if (compareBtn) {
+        compareBtn.addEventListener('click', loadCompareData);
+    }
+
+    // Populate model dropdown from API
+    populateModelFilter();
+
+    // Initial data load
+    loadAnalysisData();
+}
+
+async function populateModelFilter() {
+    var days = state.analysisState.days || '30';
+    try {
+        var resp = await fetch('/api/analysis/models?days=' + days);
+        var models = resp.ok ? await resp.json() : [];
+        var select = $('#filter-model');
+        if (!select) return;
+
+        // Keep the "全部模型" option
+        select.innerHTML = '<option value="">全部模型</option>';
+
+        if (Array.isArray(models)) {
+            var seen = {};
+            for (var i = 0; i < models.length; i++) {
+                var name = models[i].model;
+                if (name && !seen[name]) {
+                    seen[name] = true;
+                    var opt = document.createElement('option');
+                    opt.value = name;
+                    opt.textContent = name;
+                    select.appendChild(opt);
+                }
+            }
+        }
+    } catch (e) {
+        console.warn('[Analysis] Failed to load models:', e);
+    }
+}
+
 // ── CSV Import ──────────────────────────────────────
 const dropZone = $('#csvDropZone');
 const fileInput = $('#csvFileInput');
@@ -1784,13 +2233,16 @@ if (fileInput) {
 }
 
 function handleCsvFile(file) {
-    if (!file.name.endsWith('.csv')) {
-        showCsvResult('仅支持 CSV 文件', 'error');
+    var ext = file.name.split('.').pop().toLowerCase();
+    if (ext === 'csv' || ext === 'zip') {
+        state.pendingCsvFile = file;
+        var typeLabel = ext === 'zip' ? 'ZIP' : 'CSV';
+        showCsvResult('已选择 ' + typeLabel + ': ' + file.name + ' (' + formatBytes(file.size) + ')', 'success');
+        $('#csvPreview').classList.remove('hidden');
+    } else {
+        showCsvResult('仅支持 .csv 或 .zip 文件', 'error');
         return;
     }
-    state.pendingCsvFile = file;
-    showCsvResult('已选择: ' + file.name + ' (' + formatBytes(file.size) + ')', 'success');
-    $('#csvPreview').classList.remove('hidden');
 }
 
 function showCsvResult(msg, type) {
@@ -1820,8 +2272,10 @@ $('#csvImportBtn')?.addEventListener('click', async () => {
             }
             showCsvResult(msg, 'success');
             state.pendingCsvFile = null;
-            // Refresh data
-            setTimeout(() => location.reload(), 1500);
+            $('#csvPreview').classList.add('hidden');
+            showToast(msg, 'success');
+            // Refresh analysis data without page reload
+            if (typeof loadAnalysisData === 'function') loadAnalysisData();
         } else {
             showCsvResult('✕ 导入失败', 'error');
         }
@@ -1848,78 +2302,119 @@ async function checkAiWidgets() {
     }
 }
 
-// Load config
+// Load config — multi-vendor
 async function loadConfig() {
     try {
         const resp = await fetch('/api/config');
         state.config = await resp.json();
         const cfg = state.config;
 
-        if ($('#cfgApiKey')) $('#cfgApiKey').placeholder = cfg.deepseek_api_key ? '已配置: ' + cfg.deepseek_api_key.substring(0, 8) + '...' : 'sk-...';
-        if ($('#cfgBaseUrl')) $('#cfgBaseUrl').value = cfg.deepseek_base_url || 'https://api.deepseek.com';
-        if ($('#cfgDailyLimit')) $('#cfgDailyLimit').value = cfg.daily_spending_limit || 5;
-        if ($('#cfgMonthlyLimit')) $('#cfgMonthlyLimit').value = cfg.monthly_spending_limit || 100;
+        // Update each vendor status
+        var vendors = ['deepseek', 'openai', 'anthropic'];
+        for (var i = 0; i < vendors.length; i++) {
+            var v = vendors[i];
+            var key = cfg[v + '_api_key'] || '';
+            var keyEl = $('#' + v + '-api-key');
+            var statusEl = $('#vendor-status-' + v);
+            // Map DOM IDs: settings-api-key-deepseek etc.
+            var settingsKeyEl = $('#settings-api-key-' + v);
+            if (settingsKeyEl) {
+                if (key) {
+                    var masked = key.length > 8 ? key.substring(0, 4) + '****' + key.substring(key.length - 4) : '***';
+                    settingsKeyEl.placeholder = masked;
+                } else {
+                    settingsKeyEl.placeholder = v === 'deepseek' ? 'sk-...' : v === 'openai' ? 'sk-...' : 'sk-ant-...';
+                }
+            }
+            if (statusEl) {
+                statusEl.textContent = key ? '已配置' : '未配置';
+                statusEl.style.color = key ? 'var(--color-green)' : 'var(--color-grey-50)';
+            }
+        }
 
-        const wmi = cfg.wmi_remote || {};
-        if ($('#cfgWmiHost')) $('#cfgWmiHost').value = wmi.host || '';
-        if ($('#cfgWmiUser')) $('#cfgWmiUser').value = wmi.username || '';
+        // Set limits
+        var dailyEl = $('#settings-daily-limit');
+        if (dailyEl) dailyEl.value = cfg.daily_spending_limit || 5;
+        var monthlyEl = $('#settings-monthly-limit');
+        if (monthlyEl) monthlyEl.value = cfg.monthly_spending_limit || 100;
+
+        updateSystemCardVisibility();
     } catch (e) {
         console.warn('Failed to load config:', e);
     }
 }
 
-// Save Config
-async function saveConfig(body, statusEl) {
-    try {
-        const resp = await fetch('/api/config', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(body),
+// Vendor selector
+function initVendorSelector() {
+    var options = document.querySelectorAll('.vendor-option');
+    for (var i = 0; i < options.length; i++) {
+        options[i].addEventListener('click', function() {
+            var all = document.querySelectorAll('.vendor-option');
+            for (var j = 0; j < all.length; j++) all[j].classList.remove('active');
+            this.classList.add('active');
+            var radio = this.querySelector('input[type=radio]');
+            if (radio) radio.checked = true;
+            updateVendorConfig(this.getAttribute('data-vendor'));
         });
-        const result = await resp.json();
-        if (result.status === 'ok') {
-            if (statusEl) {
-                statusEl.textContent = '✓ 已保存';
-                statusEl.className = 'form-status success';
-                setTimeout(() => { statusEl.textContent = ''; }, 3000);
-            }
-            loadConfig(); // Refresh
-        } else {
-            if (statusEl) {
-                statusEl.textContent = '✕ 保存失败';
-                statusEl.className = 'form-status error';
-            }
-        }
-    } catch (e) {
-        if (statusEl) {
-            statusEl.textContent = '✕ 错误: ' + e.message;
-            statusEl.className = 'form-status error';
-        }
     }
 }
 
-$('#saveApiConfig')?.addEventListener('click', () => {
-    saveConfig({
-        deepseek_api_key: $('#cfgApiKey').value,
-        deepseek_base_url: $('#cfgBaseUrl').value,
-    }, $('#apiConfigStatus'));
-});
+function updateVendorConfig(vendor) {
+    var fields = ['deepseek', 'openai', 'anthropic'];
+    for (var i = 0; i < fields.length; i++) {
+        var el = $('#vendor-fields-' + fields[i]);
+        if (el) el.classList.toggle('hidden', fields[i] !== vendor);
+    }
+}
 
-$('#saveLimitConfig')?.addEventListener('click', () => {
-    saveConfig({
-        daily_spending_limit: parseFloat($('#cfgDailyLimit').value) || 5,
-        monthly_spending_limit: parseFloat($('#cfgMonthlyLimit').value) || 100,
-    }, $('#limitConfigStatus'));
-});
+// System card visibility (hidden until M5)
+function updateSystemCardVisibility() {
+    var card = $('#settings-system');
+    if (card) card.classList.add('hidden');
+}
 
-$('#saveWmiConfig')?.addEventListener('click', () => {
-    saveConfig({
-        wmi_remote: {
-            host: $('#cfgWmiHost').value,
-            username: $('#cfgWmiUser').value,
-            password: $('#cfgWmiPass').value,
-        }
-    }, $('#wmiConfigStatus'));
+// Settings save handler
+document.addEventListener('DOMContentLoaded', function() {
+    var saveBtn = $('#settings-save-btn');
+    if (saveBtn) {
+        saveBtn.addEventListener('click', async function() {
+            var active = document.querySelector('.vendor-option.active');
+            var vendor = active ? active.getAttribute('data-vendor') : 'deepseek';
+            var keyEl = $('#settings-api-key-' + vendor);
+            var urlEl = $('#settings-base-url-' + vendor);
+            var body = {};
+            if (keyEl) body[vendor + '_api_key'] = keyEl.value;
+            if (urlEl) body[vendor + '_base_url'] = urlEl.value;
+            body.daily_spending_limit = parseFloat($('#settings-daily-limit')?.value) || 5;
+            body.monthly_spending_limit = parseFloat($('#settings-monthly-limit')?.value) || 100;
+
+            try {
+                var resp = await fetch('/api/config', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(body),
+                });
+                var result = await resp.json();
+                var statusEl = $('#settings-status');
+                if (result.status === 'ok') {
+                    if (statusEl) {
+                        statusEl.textContent = '✓ 已保存';
+                        statusEl.className = 'form-status success';
+                        setTimeout(function() { statusEl.textContent = ''; }, 3000);
+                    }
+                    showToast('配置已保存', 'success');
+                    loadConfig();
+                } else {
+                    if (statusEl) {
+                        statusEl.textContent = '✕ 保存失败';
+                        statusEl.className = 'form-status error';
+                    }
+                }
+            } catch (e) {
+                showToast('保存失败: ' + e.message, 'error');
+            }
+        });
+    }
 });
 
 // ── Alert Close ────────────────────────────────────
@@ -1936,6 +2431,13 @@ function init() {
     WidgetEngine.init();
     setTimeout(function() { checkAiWidgets(); }, 500);
 
+    // Initialize Analysis Tab
+    initAnalysisTab();
+
+    // Initialize vendor selector
+    initVendorSelector();
+    updateSystemCardVisibility();
+
     // Initialize hardware tab charts
     initHwCpuCoresChart();
     initHwMemChart();
@@ -1943,7 +2445,6 @@ function init() {
     initHwGpuTempChart();
     initHwNetChart();
     initHwBatteryChart();
-    initHistoryTrendChart();
 
     // Connect WebSocket
     connectWs();

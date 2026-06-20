@@ -184,15 +184,25 @@ async def get_balance_history(days: int = 30) -> List[dict]:
 
 
 async def import_csv_data(records: list, filename: str) -> int:
-    """Import CSV records into the database."""
+    """Import CSV records into the database, skipping duplicates by (timestamp, model)."""
     async with aiosqlite.connect(DB_PATH) as db:
         now = datetime.now(timezone.utc).isoformat()
         count = 0
         for r in records:
+            ts = r.get("timestamp", now)
+            md = r.get("model", "unknown")
+            # Dedup: skip if (timestamp, model) already exists
+            cursor = await db.execute(
+                "SELECT COUNT(*) FROM deepseek_usage WHERE timestamp = ? AND model = ?",
+                (ts, md)
+            )
+            row = await cursor.fetchone()
+            if row and row[0] > 0:
+                continue
             await db.execute(
                 "INSERT INTO deepseek_usage (timestamp, model, input_tokens, output_tokens, cached_tokens, total_tokens, cost) VALUES (?, ?, ?, ?, ?, ?, ?)",
-                (r.get("timestamp", now),
-                 r.get("model", "unknown"),
+                (ts,
+                 md,
                  r.get("input_tokens", 0),
                  r.get("output_tokens", 0),
                  r.get("cached_tokens", 0),

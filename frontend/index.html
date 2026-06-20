@@ -184,29 +184,138 @@
 
         <!-- ─── TAB: ANALYSIS ─── -->
         <section class="tab-content" id="tab-analysis">
-            <div class="history-grid">
+            <!-- KPI Row -->
+            <div class="analysis-kpi-row">
+                <div class="card kpi-card">
+                    <div class="kpi-label">总 Token 消耗</div>
+                    <div class="kpi-value" id="kpi-total-tokens-val">—</div>
+                </div>
+                <div class="card kpi-card">
+                    <div class="kpi-label">总费用</div>
+                    <div class="kpi-value" id="kpi-total-cost-val">—</div>
+                </div>
+                <div class="card kpi-card">
+                    <div class="kpi-label">缓存命中率</div>
+                    <div class="kpi-value" id="kpi-cache-rate-val">—</div>
+                </div>
+                <div class="card kpi-card">
+                    <div class="kpi-label">主要模型</div>
+                    <div class="kpi-value" id="kpi-primary-model-val">—</div>
+                </div>
+            </div>
+
+            <!-- Filter Row -->
+            <div class="analysis-filter-row">
+                <div class="filter-group">
+                    <label class="filter-label">日期范围</label>
+                    <select id="filter-days">
+                        <option value="7">7天</option>
+                        <option value="30" selected>30天</option>
+                        <option value="90">90天</option>
+                        <option value="180">180天</option>
+                        <option value="custom">自定义</option>
+                    </select>
+                </div>
+                <div id="custom-date-group" class="filter-group hidden">
+                    <label class="filter-label">起止</label>
+                    <input type="date" id="filter-date-start">
+                    <input type="date" id="filter-date-end">
+                </div>
+                <div class="filter-group">
+                    <label class="filter-label">模型</label>
+                    <select id="filter-model">
+                        <option value="">全部模型</option>
+                    </select>
+                </div>
+                <div class="filter-group">
+                    <label class="filter-label">对比</label>
+                    <label class="toggle-switch">
+                        <input type="checkbox" id="compare-toggle">
+                        <span class="toggle-track"></span>
+                    </label>
+                </div>
+            </div>
+
+            <!-- Compare Dates (hidden by default) -->
+            <div id="compare-dates" class="analysis-compare-row hidden">
+                <div class="compare-group">
+                    <span class="compare-label">期间 A</span>
+                    <input type="date" id="compare-date-a-start">
+                    <input type="date" id="compare-date-a-end">
+                </div>
+                <div class="compare-group">
+                    <span class="compare-label">期间 B</span>
+                    <input type="date" id="compare-date-b-start">
+                    <input type="date" id="compare-date-b-end">
+                </div>
+                <button class="btn-secondary" id="compare-load-btn">对比</button>
+            </div>
+
+            <!-- Charts Grid -->
+            <div class="analysis-charts-grid">
                 <div class="card chart-wide">
-                    <div class="card-header">Token 历史趋势 (30日)</div>
+                    <div class="card-header">Token 趋势</div>
                     <div class="chart-container">
-                        <canvas id="historyTrendChart"></canvas>
+                        <canvas id="tokenTrendChart"></canvas>
                     </div>
                 </div>
                 <div class="card">
-                    <div class="card-header">CSV 数据导入</div>
-                    <div class="csv-upload-area" id="csvDropZone">
-                        <div class="csv-icon">↑</div>
-                        <p class="csv-text">拖拽 CSV 文件到此处</p>
-                        <p class="csv-sub">或点击选择文件</p>
-                        <input type="file" id="csvFileInput" accept=".csv" hidden>
-                        <button class="csv-btn" id="csvSelectBtn">选择文件</button>
+                    <div class="card-header">模型分布</div>
+                    <div class="chart-container">
+                        <canvas id="modelBreakdownChart"></canvas>
                     </div>
-                    <div class="csv-preview hidden" id="csvPreview">
-                        <p class="csv-result" id="csvResult"></p>
-                        <button class="csv-btn primary" id="csvImportBtn">确认导入</button>
+                </div>
+                <div class="card">
+                    <div class="card-header">缓存命中率</div>
+                    <div class="chart-container">
+                        <canvas id="cacheRateChart"></canvas>
                     </div>
-                    <div class="csv-format-note">
-                        <p>支持的列名: timestamp, model, input_tokens, output_tokens, cached_tokens, total_tokens, cost</p>
+                </div>
+                <div class="card chart-wide">
+                    <div class="card-header">费用趋势</div>
+                    <div class="chart-container">
+                        <canvas id="costTrendChart"></canvas>
                     </div>
+                </div>
+            </div>
+
+            <!-- Data Table -->
+            <div class="card">
+                <div class="card-header">详细记录</div>
+                <div class="table-wrapper">
+                    <table class="analysis-table">
+                        <thead>
+                            <tr>
+                                <th>日期</th>
+                                <th>模型</th>
+                                <th class="num">输入 Token</th>
+                                <th class="num">输出 Token</th>
+                                <th class="num">缓存 Token</th>
+                                <th class="num">总 Token</th>
+                                <th class="num">费用</th>
+                            </tr>
+                        </thead>
+                        <tbody id="analysis-table-body"></tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- CSV Import -->
+            <div class="card">
+                <div class="card-header">CSV 数据导入</div>
+                <div class="csv-upload-area" id="csvDropZone">
+                    <div class="csv-icon">↑</div>
+                    <p class="csv-text">拖拽 CSV 文件到此处</p>
+                    <p class="csv-sub">或点击选择文件</p>
+                    <input type="file" id="csvFileInput" accept=".csv" hidden>
+                    <button class="csv-btn" id="csvSelectBtn">选择文件</button>
+                </div>
+                <div class="csv-preview hidden" id="csvPreview">
+                    <p class="csv-result" id="csvResult"></p>
+                    <button class="csv-btn primary" id="csvImportBtn">确认导入</button>
+                </div>
+                <div class="csv-format-note">
+                    <p>支持的列名: timestamp, model, input_tokens, output_tokens, cached_tokens, total_tokens, cost</p>
                 </div>
             </div>
         </section>
@@ -214,19 +323,71 @@
         <!-- ─── TAB: SETTINGS ─── -->
         <section id="tab-settings" class="tab-content">
             <div class="tab-header"><h2>配置</h2></div>
-            <div class="settings-card">
-                <h3>Deepseek API</h3>
-                <form id="settings-form">
-                    <label>API Key <input type="password" id="settings-api-key" placeholder="sk-..."></label>
-                    <label>Base URL <input type="text" id="settings-base-url" value="https://api.deepseek.com"></label>
-                    <label>Daily Limit ($) <input type="number" id="settings-daily-limit" step="0.1"></label>
-                    <label>Monthly Limit ($) <input type="number" id="settings-monthly-limit" step="0.1"></label>
-                    <button type="submit" class="btn-primary">SAVE</button>
-                </form>
+
+            <!-- AI 供应商 -->
+            <div class="settings-card" id="settings-vendor">
+                <div class="card-header red">AI 供应商</div>
+                <div class="vendor-selector" id="vendorSelector">
+                    <label class="vendor-option active" data-vendor="deepseek">
+                        <input type="radio" name="vendor-select" value="deepseek" checked hidden>
+                        <span class="vendor-radio" aria-hidden="true"></span>
+                        <span class="vendor-name">Deepseek</span>
+                        <span class="vendor-status" id="vendor-status-deepseek">未配置</span>
+                    </label>
+                    <label class="vendor-option" data-vendor="openai">
+                        <input type="radio" name="vendor-select" value="openai" hidden>
+                        <span class="vendor-radio" aria-hidden="true"></span>
+                        <span class="vendor-name">OpenAI</span>
+                        <span class="vendor-status" id="vendor-status-openai">未配置</span>
+                    </label>
+                    <label class="vendor-option" data-vendor="anthropic">
+                        <input type="radio" name="vendor-select" value="anthropic" hidden>
+                        <span class="vendor-radio" aria-hidden="true"></span>
+                        <span class="vendor-name">Anthropic</span>
+                        <span class="vendor-status" id="vendor-status-anthropic">未配置</span>
+                    </label>
+                </div>
+                <div class="vendor-config">
+                    <div class="vendor-fields" id="vendor-fields-deepseek">
+                        <label>API Key <input type="password" id="settings-api-key-deepseek" placeholder="sk-..."></label>
+                        <label>Base URL <input type="text" id="settings-base-url-deepseek" value="https://api.deepseek.com"></label>
+                    </div>
+                    <div class="vendor-fields hidden" id="vendor-fields-openai">
+                        <label>API Key <input type="password" id="settings-api-key-openai" placeholder="sk-..."></label>
+                        <label>Base URL <input type="text" id="settings-base-url-openai" value="https://api.openai.com/v1"></label>
+                    </div>
+                    <div class="vendor-fields hidden" id="vendor-fields-anthropic">
+                        <label>API Key <input type="password" id="settings-api-key-anthropic" placeholder="sk-ant-..."></label>
+                        <label>Base URL <input type="text" id="settings-base-url-anthropic" value="https://api.anthropic.com"></label>
+                    </div>
+                    <label>每日限额 ($) <input type="number" id="settings-daily-limit" step="0.1"></label>
+                    <label>每月限额 ($) <input type="number" id="settings-monthly-limit" step="0.1"></label>
+                    <div class="form-actions">
+                        <button class="btn-primary" id="settings-save-btn">保存</button>
+                        <span class="form-status" id="settings-status"></span>
+                    </div>
+                </div>
             </div>
-            <div class="settings-card">
-                <h3>System</h3>
-                <label><input type="checkbox" id="settings-autostart"> Auto Start on Boot</label>
+
+            <!-- 系统 (默认隐藏, M5完成后启用) -->
+            <div class="settings-card hidden" id="settings-system">
+                <div class="card-header red">系统 [LAN]</div>
+                <label><input type="checkbox" id="settings-autostart"> 开机自动启动 Pulse</label>
+                <label><input type="checkbox" id="settings-autoreconnect" disabled> 启动后自动连接主控端 <span class="hint">(需 LAN 插件)</span></label>
+            </div>
+
+            <!-- 关于 -->
+            <div class="settings-card" id="settings-about">
+                <div class="card-header">关于 PULSE</div>
+                <div class="about-info">
+                    <p><strong>版本</strong> <span id="about-version">2.0.0</span></p>
+                    <p><strong>构建</strong> <span id="about-build">d683786</span></p>
+                    <p><strong>技术栈</strong> Tauri v2 + Python FastAPI + Chart.js</p>
+                    <div class="about-links">
+                        <a href="https://github.com/jiay98528-dev/Pulse" target="_blank" class="btn-secondary">GitHub</a>
+                        <a href="#" target="_blank" class="btn-secondary">文档</a>
+                    </div>
+                </div>
             </div>
         </section>
 

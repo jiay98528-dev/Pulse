@@ -7,6 +7,10 @@ CONFIG_PATH = Path(__file__).parent / "config.json"
 DEFAULT_CONFIG = {
     "deepseek_api_key": "",
     "deepseek_base_url": "https://api.deepseek.com",
+    "openai_api_key": "",
+    "openai_base_url": "https://api.openai.com",
+    "anthropic_api_key": "",
+    "anthropic_base_url": "https://api.anthropic.com",
     "daily_spending_limit": 5.0,
     "monthly_spending_limit": 100.0,
     "wmi_remote": {
