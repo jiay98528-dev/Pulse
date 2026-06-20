@@ -1,0 +1,37 @@
+name: Theme Validation
+on:
+  pull_request:
+    paths: ['themes/**']
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate theme.json
+        run: |
+          for f in themes/*/theme.json; do
+            echo "Validating: $f"
+            python3 -c "
+import json
+with open('$f') as fh:
+    t = json.load(fh)
+assert 'name' in t, 'Missing name'
+assert 'version' in t, 'Missing version'
+assert 'tokens' in t, 'Missing tokens'
+required_tokens = ['colorPrimary', 'colorBackground', 'colorText', 'fontBody', 'fontMono']
+for k in required_tokens:
+    assert k in t['tokens'], f'Missing token: {k}'
+print('  OK -', t.get('name', 'unknown'))
+"
+          done
+      - name: Validate file size
+        run: |
+          find themes/ -name '*.json' -o -name '*.png' -o -name '*.css' | while read f; do
+            size=$(stat -c%s "$f")
+            if [ "$size" -gt 500000 ]; then
+              echo "ERROR: $f exceeds 500KB ($size bytes)"
+              exit 1
+            fi
+          done
+          echo "All files within size limits"

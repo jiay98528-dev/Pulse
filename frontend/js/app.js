@@ -33,7 +33,6 @@ const state = {
     maxHistoryPoints: 60,
     charts: {},
     pendingCsvFile: null,
-    analysisState: { days: 30, model: '', currentData: [], compareEnabled: false },
     config: {},
     netHistory: { timestamps: [], recv: [], sent: [] },
     lastDiskData: null,
@@ -1746,454 +1745,6 @@ function updateRealtimeCharts() {
     }
 }
 
-// ── Analysis Tab ───────────────────────────────
-
-async function loadAnalysisData() {
-    const daysEl = $('#filter-days');
-    const modelEl = $('#filter-model');
-    const days = daysEl ? daysEl.value : '30';
-    const model = modelEl ? modelEl.value : '';
-
-    state.analysisState.days = days;
-    state.analysisState.model = model;
-
-    try {
-        const summaryUrl = '/api/analysis/summary?days=' + days;
-        const historyUrl = '/api/analysis/history?days=' + days + '&model=' + encodeURIComponent(model);
-        const modelsUrl = '/api/analysis/models?days=' + days;
-
-        const [summaryResp, historyResp, modelsResp] = await Promise.all([
-            fetch(summaryUrl),
-            fetch(historyUrl),
-            fetch(modelsUrl),
-        ]);
-
-        const summaryData = summaryResp.ok ? await summaryResp.json() : {};
-        const historyData = historyResp.ok ? await historyResp.json() : [];
-        const modelsData = modelsResp.ok ? await modelsResp.json() : [];
-
-        state.analysisState.currentData = historyData;
-
-        updateSummaryCards(summaryData, modelsData);
-        updateCharts(historyData, modelsData);
-        updateDataTable(historyData);
-    } catch (e) {
-        console.warn('[Analysis] Failed to load data:', e);
-    }
-}
-
-function updateSummaryCards(summary, modelsData) {
-    const tokensEl = $('#kpi-total-tokens-val');
-    const costEl = $('#kpi-total-cost-val');
-    const cacheEl = $('#kpi-cache-rate-val');
-    const modelEl = $('#kpi-primary-model-val');
-
-    if (tokensEl) {
-        tokensEl.textContent = (summary.total_tokens && summary.total_tokens > 0)
-            ? formatNumber(summary.total_tokens) : '—';
-    }
-
-    if (costEl) {
-        costEl.textContent = (summary.total_cost !== undefined && summary.total_cost !== null && summary.total_cost > 0)
-            ? '¥' + Number(summary.total_cost).toFixed(2) : '—';
-    }
-
-    if (cacheEl) {
-        if (summary.total_tokens && summary.total_tokens > 0 && summary.total_cached !== undefined) {
-            const rate = (summary.total_cached / summary.total_tokens * 100).toFixed(1);
-            cacheEl.textContent = rate + '%';
-        } else {
-            cacheEl.textContent = '—';
-        }
-    }
-
-    if (modelEl) {
-        if (Array.isArray(modelsData) && modelsData.length > 0) {
-            // Sort by total_tokens descending, pick first
-            var sorted = modelsData.slice().sort(function(a, b) {
-                return (b.total_tokens || 0) - (a.total_tokens || 0);
-            });
-            modelEl.textContent = sorted[0].model || '—';
-        } else {
-            modelEl.textContent = '—';
-        }
-    }
-}
-
-function updateCharts(history, models) {
-    // Aggregate history by date
-    var dailyMap = {};
-    for (var i = 0; i < history.length; i++) {
-        var row = history[i];
-        var date = row.date || row.timestamp || '';
-        date = date.substring(0, 10);
-        if (!dailyMap[date]) {
-            dailyMap[date] = { total: 0, input: 0, cost: 0, count: 0 };
-        }
-        dailyMap[date].total += row.total_tokens || 0;
-        dailyMap[date].input += row.input_tokens || 0;
-        dailyMap[date].cost += row.cost || 0;
-        dailyMap[date].count++;
-    }
-
-    var dates = Object.keys(dailyMap).sort();
-    var totals = dates.map(function(d) { return dailyMap[d].total; });
-    var inputs = dates.map(function(d) { return dailyMap[d].input; });
-    var costs = dates.map(function(d) { return dailyMap[d].cost; });
-
-    // Token Trend chart
-    var tokenChart = state.charts.tokenTrend;
-    if (tokenChart) {
-        tokenChart.data.labels = dates;
-        tokenChart.data.datasets[0].data = totals;
-        tokenChart.data.datasets[1].data = inputs;
-        tokenChart.update('none');
-    }
-
-    // Model Breakdown chart
-    var modelChart = state.charts.modelBreakdown;
-    if (modelChart) {
-        var modelLabels = [];
-        var modelData = [];
-        if (Array.isArray(models) && models.length > 0) {
-            var sortedModels = models.slice().sort(function(a, b) {
-                return (b.total_tokens || 0) - (a.total_tokens || 0);
-            });
-            modelLabels = sortedModels.map(function(m) {
-                var name = m.model || 'unknown';
-                return name.length > 16 ? name.substring(0, 16) + '…' : name;
-            });
-            modelData = sortedModels.map(function(m) { return m.total_tokens || 0; });
-        }
-        modelChart.data.labels = modelLabels;
-        modelChart.data.datasets[0].data = modelData;
-        modelChart.update('none');
-    }
-
-    // Cache Rate chart (doughnut)
-    var cacheChart = state.charts.cacheRate;
-    if (cacheChart) {
-        var totalTokens = 0;
-        var totalCached = 0;
-        for (var j = 0; j < history.length; j++) {
-            totalTokens += history[j].total_tokens || 0;
-            totalCached += history[j].cached_tokens || 0;
-        }
-        if (totalTokens > 0 && totalCached > 0) {
-            cacheChart.data.datasets[0].data = [totalCached, totalTokens - totalCached];
-        } else {
-            cacheChart.data.datasets[0].data = [0, 100];
-        }
-        cacheChart.update('none');
-    }
-
-    // Cost Trend chart
-    var costChart = state.charts.costTrend;
-    if (costChart) {
-        costChart.data.labels = dates;
-        costChart.data.datasets[0].data = costs;
-        costChart.update('none');
-    }
-}
-
-function updateDataTable(rows) {
-    var tbody = $('#analysis-table-body');
-    if (!tbody) return;
-
-    tbody.innerHTML = '';
-
-    if (!rows || rows.length === 0) {
-        var emptyRow = document.createElement('tr');
-        emptyRow.className = 'empty-row';
-        emptyRow.innerHTML = '<td colspan="7">暂无数据 · 导入 CSV 后显示</td>';
-        tbody.appendChild(emptyRow);
-        return;
-    }
-
-    for (var i = 0; i < rows.length; i++) {
-        var r = rows[i];
-        var tr = document.createElement('tr');
-        var date = (r.date || r.timestamp || '').substring(0, 10);
-        var model = r.model || '—';
-        var inputTokens = r.input_tokens || 0;
-        var outputTokens = r.output_tokens || 0;
-        var cachedTokens = r.cached_tokens || 0;
-        var totalTokens = r.total_tokens || 0;
-        var cost = r.cost || 0;
-
-        tr.innerHTML =
-            '<td>' + date + '</td>' +
-            '<td>' + model + '</td>' +
-            '<td class="num">' + formatNumber(inputTokens) + '</td>' +
-            '<td class="num">' + formatNumber(outputTokens) + '</td>' +
-            '<td class="num">' + formatNumber(cachedTokens) + '</td>' +
-            '<td class="num">' + formatNumber(totalTokens) + '</td>' +
-            '<td class="num">' + formatCurrency(cost) + '</td>';
-        tbody.appendChild(tr);
-    }
-}
-
-function handleCompareToggle() {
-    var toggle = $('#compare-toggle');
-    var enabled = toggle ? toggle.checked : false;
-    state.analysisState.compareEnabled = enabled;
-
-    var compareDates = $('#compare-dates');
-    if (compareDates) {
-        compareDates.classList.toggle('hidden', !enabled);
-    }
-
-    if (enabled) {
-        // Set default dates to cover the current filter range
-        var days = state.analysisState.days;
-        var daysNum = parseInt(days, 10);
-        if (isNaN(daysNum) || daysNum < 1) daysNum = 30;
-
-        var now = new Date();
-        var endA = new Date(now);
-        var startA = new Date(now);
-        startA.setDate(startA.getDate() - daysNum);
-
-        var endB = new Date(startA);
-        var startB = new Date(startA);
-        startB.setDate(startB.getDate() - daysNum);
-
-        var fmt = function(d) {
-            var y = d.getFullYear();
-            var m = String(d.getMonth() + 1).padStart(2, '0');
-            var day = String(d.getDate()).padStart(2, '0');
-            return y + '-' + m + '-' + day;
-        };
-
-        var aStart = $('#compare-date-a-start');
-        var aEnd = $('#compare-date-a-end');
-        var bStart = $('#compare-date-b-start');
-        var bEnd = $('#compare-date-b-end');
-        if (aStart) aStart.value = fmt(startA);
-        if (aEnd) aEnd.value = fmt(endA);
-        if (bStart) bStart.value = fmt(startB);
-        if (bEnd) bEnd.value = fmt(endB);
-
-        loadCompareData();
-    } else {
-        loadAnalysisData();
-    }
-}
-
-async function loadCompareData() {
-    var aStart = $('#compare-date-a-start');
-    var aEnd = $('#compare-date-a-end');
-    var bStart = $('#compare-date-b-start');
-    var bEnd = $('#compare-date-b-end');
-    var modelEl = $('#filter-model');
-    var model = modelEl ? modelEl.value : '';
-
-    if (!aStart || !aEnd || !bStart || !bEnd) return;
-
-    var periodA = 'start=' + aStart.value + '&end=' + aEnd.value;
-    var periodB = 'start=' + bStart.value + '&end=' + bEnd.value;
-    var modelParam = model ? '&model=' + encodeURIComponent(model) : '';
-
-    try {
-        const [respA, respB] = await Promise.all([
-            fetch('/api/analysis/history?' + periodA + modelParam),
-            fetch('/api/analysis/history?' + periodB + modelParam),
-        ]);
-
-        var dataA = respA.ok ? await respA.json() : [];
-        var dataB = respB.ok ? await respB.json() : [];
-
-        renderCompareCharts(dataA, dataB);
-    } catch (e) {
-        console.warn('[Analysis] Compare data load failed:', e);
-    }
-}
-
-function renderCompareCharts(dataA, dataB) {
-    // Aggregate both datasets by date
-    function aggregate(data) {
-        var map = {};
-        for (var i = 0; i < data.length; i++) {
-            var date = (data[i].date || data[i].timestamp || '').substring(0, 10);
-            if (!map[date]) map[date] = { total: 0, cost: 0 };
-            map[date].total += data[i].total_tokens || 0;
-            map[date].cost += data[i].cost || 0;
-        }
-        var keys = Object.keys(map).sort();
-        return {
-            labels: keys,
-            totals: keys.map(function(k) { return map[k].total; }),
-            costs: keys.map(function(k) { return map[k].cost; }),
-        };
-    }
-
-    var aggA = aggregate(dataA);
-    var aggB = aggregate(dataB);
-
-    // Token Trend chart — dual datasets
-    var tokenChart = state.charts.tokenTrend;
-    if (tokenChart) {
-        // Merge and sort all unique labels
-        var allLabels = {};
-        for (var i = 0; i < aggA.labels.length; i++) allLabels[aggA.labels[i]] = true;
-        for (var j = 0; j < aggB.labels.length; j++) allLabels[aggB.labels[j]] = true;
-        var sortedLabels = Object.keys(allLabels).sort();
-
-        var dataMapA = {};
-        for (var k = 0; k < aggA.labels.length; k++) {
-            dataMapA[aggA.labels[k]] = aggA.totals[k];
-        }
-        var dataMapB = {};
-        for (var l = 0; l < aggB.labels.length; l++) {
-            dataMapB[aggB.labels[l]] = aggB.totals[l];
-        }
-
-        var seriesA = sortedLabels.map(function(d) { return dataMapA[d] || 0; });
-        var seriesB = sortedLabels.map(function(d) { return dataMapB[d] || 0; });
-
-        tokenChart.data.labels = sortedLabels;
-        tokenChart.data.datasets = [{
-            label: '期间 A',
-            data: seriesA,
-            borderColor: chartColors.red,
-            backgroundColor: 'transparent',
-            borderWidth: 3,
-            tension: 0,
-            pointRadius: 0,
-            pointHoverRadius: 6,
-            fill: false,
-        }, {
-            label: '期间 B',
-            data: seriesB,
-            borderColor: chartColors.white,
-            backgroundColor: 'transparent',
-            borderWidth: 2,
-            tension: 0,
-            pointRadius: 0,
-            pointHoverRadius: 4,
-            borderDash: [4, 4],
-            fill: false,
-        }];
-        tokenChart.update('none');
-    }
-
-    // Cost Trend chart — dual datasets
-    var costChart = state.charts.costTrend;
-    if (costChart) {
-        var allCostLabels = {};
-        for (var m = 0; m < aggA.labels.length; m++) allCostLabels[aggA.labels[m]] = true;
-        for (var n = 0; n < aggB.labels.length; n++) allCostLabels[aggB.labels[n]] = true;
-        var sortedCostLabels = Object.keys(allCostLabels).sort();
-
-        var costMapA = {};
-        for (var p = 0; p < aggA.labels.length; p++) {
-            costMapA[aggA.labels[p]] = aggA.costs[p];
-        }
-        var costMapB = {};
-        for (var q = 0; q < aggB.labels.length; q++) {
-            costMapB[aggB.labels[q]] = aggB.costs[q];
-        }
-
-        var costSeriesA = sortedCostLabels.map(function(d) { return costMapA[d] || 0; });
-        var costSeriesB = sortedCostLabels.map(function(d) { return costMapB[d] || 0; });
-
-        costChart.data.labels = sortedCostLabels;
-        costChart.data.datasets = [{
-            label: '期间 A',
-            data: costSeriesA,
-            borderColor: chartColors.red,
-            backgroundColor: 'transparent',
-            borderWidth: 3,
-            tension: 0,
-            pointRadius: 0,
-            pointHoverRadius: 6,
-            fill: false,
-        }, {
-            label: '期间 B',
-            data: costSeriesB,
-            borderColor: chartColors.white,
-            backgroundColor: 'transparent',
-            borderWidth: 2,
-            tension: 0,
-            pointRadius: 0,
-            pointHoverRadius: 4,
-            borderDash: [4, 4],
-            fill: false,
-        }];
-        costChart.update('none');
-    }
-}
-
-function initAnalysisTab() {
-    // Initialize charts
-    initTokenTrendChart();
-    initModelBreakdownChart();
-    initCacheRateChart();
-    initCostTrendChart();
-
-    // Bind filter changes
-    var filterDays = $('#filter-days');
-    if (filterDays) {
-        filterDays.addEventListener('change', function() {
-            var customGroup = $('#custom-date-group');
-            if (customGroup) {
-                customGroup.classList.toggle('hidden', this.value !== 'custom');
-            }
-            loadAnalysisData();
-        });
-    }
-
-    var filterModel = $('#filter-model');
-    if (filterModel) {
-        filterModel.addEventListener('change', loadAnalysisData);
-    }
-
-    var compareToggle = $('#compare-toggle');
-    if (compareToggle) {
-        compareToggle.addEventListener('change', handleCompareToggle);
-    }
-
-    var compareBtn = $('#compare-load-btn');
-    if (compareBtn) {
-        compareBtn.addEventListener('click', loadCompareData);
-    }
-
-    // Populate model dropdown from API
-    populateModelFilter();
-
-    // Initial data load
-    loadAnalysisData();
-}
-
-async function populateModelFilter() {
-    var days = state.analysisState.days || '30';
-    try {
-        var resp = await fetch('/api/analysis/models?days=' + days);
-        var models = resp.ok ? await resp.json() : [];
-        var select = $('#filter-model');
-        if (!select) return;
-
-        // Keep the "全部模型" option
-        select.innerHTML = '<option value="">全部模型</option>';
-
-        if (Array.isArray(models)) {
-            var seen = {};
-            for (var i = 0; i < models.length; i++) {
-                var name = models[i].model;
-                if (name && !seen[name]) {
-                    seen[name] = true;
-                    var opt = document.createElement('option');
-                    opt.value = name;
-                    opt.textContent = name;
-                    select.appendChild(opt);
-                }
-            }
-        }
-    } catch (e) {
-        console.warn('[Analysis] Failed to load models:', e);
-    }
-}
-
 // ── CSV Import ──────────────────────────────────────
 const dropZone = $('#csvDropZone');
 const fileInput = $('#csvFileInput');
@@ -2233,16 +1784,13 @@ if (fileInput) {
 }
 
 function handleCsvFile(file) {
-    var ext = file.name.split('.').pop().toLowerCase();
-    if (ext === 'csv' || ext === 'zip') {
-        state.pendingCsvFile = file;
-        var typeLabel = ext === 'zip' ? 'ZIP' : 'CSV';
-        showCsvResult('已选择 ' + typeLabel + ': ' + file.name + ' (' + formatBytes(file.size) + ')', 'success');
-        $('#csvPreview').classList.remove('hidden');
-    } else {
-        showCsvResult('仅支持 .csv 或 .zip 文件', 'error');
+    if (!file.name.endsWith('.csv')) {
+        showCsvResult('仅支持 CSV 文件', 'error');
         return;
     }
+    state.pendingCsvFile = file;
+    showCsvResult('已选择: ' + file.name + ' (' + formatBytes(file.size) + ')', 'success');
+    $('#csvPreview').classList.remove('hidden');
 }
 
 function showCsvResult(msg, type) {
@@ -2272,13 +1820,10 @@ $('#csvImportBtn')?.addEventListener('click', async () => {
             }
             showCsvResult(msg, 'success');
             state.pendingCsvFile = null;
-            $('#csvPreview').classList.add('hidden');
-            showToast(msg, 'success');
-            // Refresh analysis data without page reload
-            if (typeof loadAnalysisData === 'function') loadAnalysisData();
+            // Refresh data
+            setTimeout(() => location.reload(), 1500);
         } else {
-            var errMsg = result.detail || '未知错误';
-            showCsvResult('✕ 导入失败: ' + errMsg, 'error');
+            showCsvResult('✕ 导入失败', 'error');
         }
     } catch (e) {
         showCsvResult('✕ 上传错误: ' + e.message, 'error');
@@ -2303,178 +1848,78 @@ async function checkAiWidgets() {
     }
 }
 
-// Load config — multi-vendor
+// Load config
 async function loadConfig() {
     try {
         const resp = await fetch('/api/config');
         state.config = await resp.json();
         const cfg = state.config;
 
-        // Update each vendor status
-        var vendors = ['deepseek', 'openai', 'anthropic'];
-        for (var i = 0; i < vendors.length; i++) {
-            var v = vendors[i];
-            var key = cfg[v + '_api_key'] || '';
-            var keyEl = $('#' + v + '-api-key');
-            var statusEl = $('#vendor-status-' + v);
-            // Map DOM IDs: settings-api-key-deepseek etc.
-            var settingsKeyEl = $('#settings-api-key-' + v);
-            if (settingsKeyEl) {
-                if (key) {
-                    var masked = key.length > 8 ? key.substring(0, 4) + '****' + key.substring(key.length - 4) : '***';
-                    settingsKeyEl.placeholder = masked;
-                } else {
-                    settingsKeyEl.placeholder = v === 'deepseek' ? 'sk-...' : v === 'openai' ? 'sk-...' : 'sk-ant-...';
-                }
-            }
-            if (statusEl) {
-                statusEl.textContent = key ? '已配置' : '未配置';
-                statusEl.style.color = key ? 'var(--color-green)' : 'var(--color-grey-50)';
-            }
-        }
+        if ($('#cfgApiKey')) $('#cfgApiKey').placeholder = cfg.deepseek_api_key ? '已配置: ' + cfg.deepseek_api_key.substring(0, 8) + '...' : 'sk-...';
+        if ($('#cfgBaseUrl')) $('#cfgBaseUrl').value = cfg.deepseek_base_url || 'https://api.deepseek.com';
+        if ($('#cfgDailyLimit')) $('#cfgDailyLimit').value = cfg.daily_spending_limit || 5;
+        if ($('#cfgMonthlyLimit')) $('#cfgMonthlyLimit').value = cfg.monthly_spending_limit || 100;
 
-        // Set limits
-        var dailyEl = $('#settings-daily-limit');
-        if (dailyEl) dailyEl.value = cfg.daily_spending_limit || 5;
-        var monthlyEl = $('#settings-monthly-limit');
-        if (monthlyEl) monthlyEl.value = cfg.monthly_spending_limit || 100;
-
-        await updateSystemCardVisibility();
+        const wmi = cfg.wmi_remote || {};
+        if ($('#cfgWmiHost')) $('#cfgWmiHost').value = wmi.host || '';
+        if ($('#cfgWmiUser')) $('#cfgWmiUser').value = wmi.username || '';
     } catch (e) {
         console.warn('Failed to load config:', e);
     }
 }
 
-// Vendor selector
-function initVendorSelector() {
-    var options = document.querySelectorAll('.vendor-option');
-    for (var i = 0; i < options.length; i++) {
-        options[i].addEventListener('click', function() {
-            var all = document.querySelectorAll('.vendor-option');
-            for (var j = 0; j < all.length; j++) all[j].classList.remove('active');
-            this.classList.add('active');
-            var radio = this.querySelector('input[type=radio]');
-            if (radio) radio.checked = true;
-            updateVendorConfig(this.getAttribute('data-vendor'));
-        });
-    }
-}
-
-function updateVendorConfig(vendor) {
-    var fields = ['deepseek', 'openai', 'anthropic'];
-    for (var i = 0; i < fields.length; i++) {
-        var el = $('#vendor-fields-' + fields[i]);
-        if (el) el.classList.toggle('hidden', fields[i] !== vendor);
-    }
-}
-
-// System card visibility — LAN 插件启用时自动显示
-async function updateSystemCardVisibility() {
-    var card = $('#settings-system');
-    var statusEl = $('#settings-lan-status');
-    if (!card) return;
-
+// Save Config
+async function saveConfig(body, statusEl) {
     try {
-        var resp = await fetch('/api/plugins');
-        var data = await resp.json();
-        var lanEnabled = false;
-
-        // 检查 LAN 插件是否启用
-        if (Array.isArray(data)) {
-            for (var i = 0; i < data.length; i++) {
-                if (data[i].name === 'LAN 设备监控' && data[i].enabled) {
-                    lanEnabled = true;
-                    break;
-                }
+        const resp = await fetch('/api/config', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body),
+        });
+        const result = await resp.json();
+        if (result.status === 'ok') {
+            if (statusEl) {
+                statusEl.textContent = '✓ 已保存';
+                statusEl.className = 'form-status success';
+                setTimeout(() => { statusEl.textContent = ''; }, 3000);
             }
-        } else if (data.plugins && Array.isArray(data.plugins)) {
-            for (var i = 0; i < data.plugins.length; i++) {
-                if (data.plugins[i].name === 'LAN 设备监控' && data.plugins[i].enabled) {
-                    lanEnabled = true;
-                    break;
-                }
-            }
-        }
-
-        if (lanEnabled) {
-            card.classList.remove('hidden');
-
-            // 检查是否有已配对设备
-            try {
-                var devResp = await fetch('/api/lan/devices');
-                var devices = devResp.ok ? await devResp.json() : [];
-                var hasPaired = Array.isArray(devices) && devices.length > 0;
-
-                var reconnectCb = $('#settings-autoreconnect');
-                if (reconnectCb) {
-                    reconnectCb.disabled = !hasPaired;
-                    if (!hasPaired) {
-                        reconnectCb.checked = false;
-                        localStorage.removeItem('pulse-autoreconnect');
-                    }
-                }
-
-                if (statusEl) {
-                    statusEl.textContent = hasPaired
-                        ? 'LAN 插件运行中 · ' + devices.length + ' 台设备已配对'
-                        : 'LAN 插件运行中 · 暂无配对设备，自动重连不可用';
-                }
-            } catch (e) {
-                if (statusEl) statusEl.textContent = 'LAN 插件运行中';
-            }
+            loadConfig(); // Refresh
         } else {
-            card.classList.add('hidden');
-            if (statusEl) statusEl.textContent = 'LAN 插件未启用';
+            if (statusEl) {
+                statusEl.textContent = '✕ 保存失败';
+                statusEl.className = 'form-status error';
+            }
         }
     } catch (e) {
-        // API 不可用（纯前端模式或无路由）
-        card.classList.add('hidden');
-        if (statusEl) statusEl.textContent = 'LAN 插件状态未知';
+        if (statusEl) {
+            statusEl.textContent = '✕ 错误: ' + e.message;
+            statusEl.className = 'form-status error';
+        }
     }
 }
 
-// Settings save handler
-document.addEventListener('DOMContentLoaded', function() {
-    var saveBtn = $('#settings-save-btn');
-    if (saveBtn) {
-        saveBtn.addEventListener('click', async function() {
-            var active = document.querySelector('.vendor-option.active');
-            var vendor = active ? active.getAttribute('data-vendor') : 'deepseek';
-            var keyEl = $('#settings-api-key-' + vendor);
-            var urlEl = $('#settings-base-url-' + vendor);
-            var body = {};
-            if (keyEl) body[vendor + '_api_key'] = keyEl.value;
-            if (urlEl) body[vendor + '_base_url'] = urlEl.value;
-            body.daily_spending_limit = parseFloat($('#settings-daily-limit')?.value) || 5;
-            body.monthly_spending_limit = parseFloat($('#settings-monthly-limit')?.value) || 100;
+$('#saveApiConfig')?.addEventListener('click', () => {
+    saveConfig({
+        deepseek_api_key: $('#cfgApiKey').value,
+        deepseek_base_url: $('#cfgBaseUrl').value,
+    }, $('#apiConfigStatus'));
+});
 
-            try {
-                var resp = await fetch('/api/config', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(body),
-                });
-                var result = await resp.json();
-                var statusEl = $('#settings-status');
-                if (result.status === 'ok') {
-                    if (statusEl) {
-                        statusEl.textContent = '✓ 已保存';
-                        statusEl.className = 'form-status success';
-                        setTimeout(function() { statusEl.textContent = ''; }, 3000);
-                    }
-                    showToast('配置已保存', 'success');
-                    loadConfig();
-                } else {
-                    if (statusEl) {
-                        statusEl.textContent = '✕ 保存失败';
-                        statusEl.className = 'form-status error';
-                    }
-                }
-            } catch (e) {
-                showToast('保存失败: ' + e.message, 'error');
-            }
-        });
-    }
+$('#saveLimitConfig')?.addEventListener('click', () => {
+    saveConfig({
+        daily_spending_limit: parseFloat($('#cfgDailyLimit').value) || 5,
+        monthly_spending_limit: parseFloat($('#cfgMonthlyLimit').value) || 100,
+    }, $('#limitConfigStatus'));
+});
+
+$('#saveWmiConfig')?.addEventListener('click', () => {
+    saveConfig({
+        wmi_remote: {
+            host: $('#cfgWmiHost').value,
+            username: $('#cfgWmiUser').value,
+            password: $('#cfgWmiPass').value,
+        }
+    }, $('#wmiConfigStatus'));
 });
 
 // ── Alert Close ────────────────────────────────────
@@ -2487,23 +1932,9 @@ function init() {
     // Load config
     loadConfig();
 
-    // Initialize Theme Engine (load saved theme or use default)
-    ThemeEngine.init();
-
     // Initialize Widget Engine (replaces old dashboard charts)
     WidgetEngine.init();
     setTimeout(function() { checkAiWidgets(); }, 500);
-
-    // Initialize Analysis Tab
-    initAnalysisTab();
-
-    // Initialize vendor selector
-    initVendorSelector();
-    updateSystemCardVisibility();
-
-    // Initialize theme UI
-    initThemeSelector();
-    initMarketplace();
 
     // Initialize hardware tab charts
     initHwCpuCoresChart();
@@ -2512,6 +1943,7 @@ function init() {
     initHwGpuTempChart();
     initHwNetChart();
     initHwBatteryChart();
+    initHistoryTrendChart();
 
     // Connect WebSocket
     connectWs();
@@ -2632,94 +2064,556 @@ function initSettingsForm() {
   };
 }
 
-// --- Autostart Toggle (localStorage fallback, Tauri API when available) ---
+// --- Autostart Toggle ---
 function initAutostartToggle() {
   var cb = document.getElementById("settings-autostart");
   if (!cb) return;
-
-  // Restore saved state
-  var saved = localStorage.getItem('pulse-autostart');
-  if (saved === 'true') cb.checked = true;
-  if (saved === 'false') cb.checked = false;
-
   cb.onchange = function() {
-    var enabled = cb.checked;
-    localStorage.setItem('pulse-autostart', enabled ? 'true' : 'false');
-
-    // Try Tauri autostart API
-    if (window.__TAURI__ && window.__TAURI__.autostart) {
-      if (enabled) {
-        window.__TAURI__.autostart.enable().catch(function(e) {
-          console.warn('[Autostart] Tauri enable failed:', e);
-        });
-      } else {
-        window.__TAURI__.autostart.disable().catch(function(e) {
-          console.warn('[Autostart] Tauri disable failed:', e);
-        });
-      }
-    }
-
-    showToast(enabled ? '✓ 开机自启已启用' : '开机自启已禁用', 'info');
+    if (cb.checked) showToast("Auto-start enabled","info");
+    else showToast("Auto-start disabled","info");
   };
 }
 
-// --- Auto-reconnect Toggle ---
-function initAutoReconnectToggle() {
-  var cb = document.getElementById("settings-autoreconnect");
-  var intervalInput = document.getElementById("settings-reconnect-interval");
-  if (!cb) return;
+// ══════════════════════════════════════════════════
+//  Theme Engine (M4.1)
+//  JSON→CSS变量→图表重绘
+// ══════════════════════════════════════════════════
+const STORE_API = 'http://localhost:8081'; // 商店后端地址
 
-  // Restore saved state
-  var saved = localStorage.getItem('pulse-autoreconnect');
-  if (saved === 'true') cb.checked = true;
+var ThemeEngine = {
+    activeThemeId: null,
+    installedThemes: {},
 
-  var savedInterval = localStorage.getItem('pulse-reconnect-interval');
-  if (savedInterval && intervalInput) {
-    intervalInput.value = savedInterval;
-  }
+    init: function() {
+        var saved = localStorage.getItem('pulse-active-theme-id');
+        if (saved) {
+            this.activeThemeId = saved;
+        }
+        var installed = localStorage.getItem('pulse-installed-themes');
+        if (installed) {
+            try { this.installedThemes = JSON.parse(installed); } catch(e) {}
+        }
+        var tokens = localStorage.getItem('pulse-theme-tokens');
+        if (tokens) {
+            try {
+                var parsed = JSON.parse(tokens);
+                this._applyTokens(parsed);
+            } catch(e) {}
+        }
+    },
 
-  cb.onchange = function() {
-    var enabled = cb.checked;
-    localStorage.setItem('pulse-autoreconnect', enabled ? 'true' : 'false');
-    showToast(enabled ? '✓ 自动重连已启用' : '自动重连已禁用', 'info');
+    _applyTokens: function(tokens) {
+        var root = document.documentElement;
+        for (var key in tokens) {
+            if (tokens.hasOwnProperty(key)) {
+                root.style.setProperty('--' + key, tokens[key]);
+            }
+        }
+    },
 
-    // Notify backend to start/stop reconnect loop
-    if (enabled) {
-      fetch('/api/lan/reconnect/start', {
-        method: 'POST',
-        headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({ interval: parseInt(intervalInput ? intervalInput.value : '30', 10) || 30 }),
-      }).catch(function(e) {
-        console.warn('[Reconnect] Backend start failed:', e);
-      });
-    } else {
-      fetch('/api/lan/reconnect/stop', { method: 'POST' }).catch(function(e) {
-        console.warn('[Reconnect] Backend stop failed:', e);
-      });
-    }
-  };
-
-  // Interval change — save to localStorage
-  if (intervalInput) {
-    intervalInput.addEventListener('change', function() {
-      var val = parseInt(this.value, 10);
-      if (isNaN(val) || val < 10) val = 10;
-      if (val > 300) val = 300;
-      this.value = val;
-      localStorage.setItem('pulse-reconnect-interval', String(val));
-
-      // Notify backend of interval change
-      if (cb.checked) {
-        fetch('/api/lan/reconnect/interval', {
-          method: 'POST',
-          headers: {'Content-Type': 'application/json'},
-          body: JSON.stringify({ interval: val }),
-        }).catch(function(e) {
-          console.warn('[Reconnect] Interval update failed:', e);
+    activate: function(theme) {
+        var root = document.documentElement;
+        if (theme.tokens) {
+            this._applyTokens(theme.tokens);
+            localStorage.setItem('pulse-theme-tokens', JSON.stringify(theme.tokens));
+        }
+        var customEl = document.getElementById('pulse-theme-custom');
+        if (!customEl) {
+            customEl = document.createElement('style');
+            customEl.id = 'pulse-theme-custom';
+            document.head.appendChild(customEl);
+        }
+        customEl.textContent = theme.customCSS || '';
+        Object.values(state.charts).forEach(function(c) {
+            if (c && c.update) c.update();
         });
-      }
+        this.activeThemeId = theme.id || theme.name;
+        localStorage.setItem('pulse-active-theme-id', this.activeThemeId);
+        var sel = document.getElementById('theme-selector');
+        if (sel) {
+            var opt = sel.querySelector('option[value="' + this.activeThemeId + '"]');
+            if (opt) {
+                sel.value = this.activeThemeId;
+            }
+        }
+        console.log('[ThemeEngine] Activated:', theme.name || theme.id);
+    },
+
+    install: function(theme) {
+        this.installedThemes[theme.id] = {
+            name: theme.name,
+            author: theme.author,
+            type: theme.type,
+            installedAt: Date.now(),
+        };
+        localStorage.setItem('pulse-installed-themes', JSON.stringify(this.installedThemes));
+        this.activate(theme);
+        var sel = document.getElementById('theme-selector');
+        if (sel) {
+            var existing = sel.querySelector('option[value="' + theme.id + '"]');
+            if (existing) existing.remove();
+            var opt = document.createElement('option');
+            opt.value = theme.id;
+            opt.textContent = theme.name;
+            sel.appendChild(opt);
+            sel.value = theme.id;
+        }
+        showToast('主题 "' + theme.name + '" 已安装', 'success');
+    },
+
+    resetToDefault: function() {
+        localStorage.removeItem('pulse-active-theme-id');
+        localStorage.removeItem('pulse-theme-tokens');
+        var customEl = document.getElementById('pulse-theme-custom');
+        if (customEl) customEl.textContent = '';
+        var root = document.documentElement;
+        var inlineStyles = root.style;
+        var keysToRemove = [];
+        for (var i = 0; i < inlineStyles.length; i++) {
+            var key = inlineStyles[i];
+            if (key.startsWith('--color-') || key.startsWith('--font-') ||
+                key.startsWith('--text-') || key.startsWith('--shadow-') ||
+                key.startsWith('--border-') || key.startsWith('--space-') ||
+                key.startsWith('--duration-')) {
+                keysToRemove.push(key);
+            }
+        }
+        for (var j = 0; j < keysToRemove.length; j++) {
+            root.style.removeProperty(keysToRemove[j]);
+        }
+        Object.values(state.charts).forEach(function(c) {
+            if (c && c.update) c.update();
+        });
+        var sel = document.getElementById('theme-selector');
+        if (sel) sel.value = 'builtin-constructivist';
+        showToast('已恢复默认主题', 'info');
+    },
+
+    isInstalled: function(themeId) {
+        return !!this.installedThemes[themeId];
+    }
+};
+
+// ══════════════════════════════════════════════════
+//  Marketplace (M6.5)
+// ══════════════════════════════════════════════════
+
+async function loadMarketplace() {
+    var grid = document.getElementById('marketplace-grid');
+    var status = document.getElementById('marketplace-status');
+    var empty = document.getElementById('marketplace-empty');
+    if (!grid) return;
+
+    try {
+        var resp = await fetch(STORE_API + '/v1/themes');
+        if (!resp.ok) throw new Error('HTTP ' + resp.status);
+        var themes = await resp.json();
+        if (!Array.isArray(themes) || themes.length === 0) {
+            if (status) status.classList.add('hidden');
+            if (empty) empty.classList.remove('hidden');
+            return;
+        }
+
+        if (status) status.classList.add('hidden');
+        if (empty) empty.classList.add('hidden');
+        grid.innerHTML = '';
+
+        for (var i = 0; i < themes.length; i++) {
+            var t = themes[i];
+            var item = document.createElement('div');
+            item.className = 'marketplace-item';
+            item.setAttribute('data-theme-id', t.id);
+
+            var badgeText = t.price > 0 ? '¥' + t.price.toFixed(2) : '免费';
+            var badgeClass = t.price > 0 ? 'paid' : 'free';
+            var typeLabel = t.type || (t.price > 0 ? '官方' : '社区');
+
+            item.innerHTML =
+                '<div class="marketplace-preview" style="background:' + (t.previewColor || '#000') + ';border:1px solid #333;">' +
+                    '<span style="font-size:24px;color:' + (t.previewIconColor || '#666') + ';">' + (t.previewIcon || '★') + '</span>' +
+                '</div>' +
+                '<div class="marketplace-info">' +
+                    '<div class="marketplace-name">' + escapeHtml(t.name) + '</div>' +
+                    '<div class="marketplace-author">' + escapeHtml(t.author || '未知') + ' &middot; ' + typeLabel + '</div>' +
+                    '<div class="marketplace-badge ' + badgeClass + '">' + badgeText + '</div>' +
+                '</div>';
+
+            (function(theme) {
+                item.addEventListener('click', function() { showThemeDetail(theme); });
+            })(t);
+
+            grid.appendChild(item);
+        }
+    } catch (e) {
+        console.warn('[Marketplace] Cannot reach store:', e);
+        if (status) {
+            status.textContent = '无法连接主题商店 (' + e.message + ')';
+            status.style.color = 'var(--color-red)';
+        }
+        showOfflineMarketplace(grid, status, empty);
+    }
+}
+
+function showOfflineMarketplace(grid, status, empty) {
+    if (!grid) return;
+    grid.innerHTML = '';
+    var fallbackThemes = [
+        { id: 'builtin-constructivist', name: '苏维埃全主义构成', author: 'Pulse Team', type: '官方', price: 0, previewIcon: '★', previewColor: '#000', previewIconColor: '#CC0000' }
+    ];
+    for (var i = 0; i < fallbackThemes.length; i++) {
+        var t = fallbackThemes[i];
+        var item = document.createElement('div');
+        item.className = 'marketplace-item';
+        item.innerHTML =
+            '<div class="marketplace-preview" style="background:' + t.previewColor + ';border:1px solid #333;">' +
+                '<span style="font-size:24px;color:' + t.previewIconColor + ';">' + t.previewIcon + '</span>' +
+            '</div>' +
+            '<div class="marketplace-info">' +
+                '<div class="marketplace-name">' + t.name + '</div>' +
+                '<div class="marketplace-author">' + t.author + ' &middot; ' + t.type + '</div>' +
+                '<div class="marketplace-badge free">免费</div>' +
+            '</div>';
+        grid.appendChild(item);
+    }
+    if (status) {
+        status.textContent = '商店离线，显示本地可用主题';
+        status.style.color = 'var(--color-yellow)';
+    }
+}
+
+var _currentDetailTheme = null;
+
+function showThemeDetail(theme) {
+    _currentDetailTheme = theme;
+    var overlay = document.getElementById('theme-detail-overlay');
+    if (!overlay) return;
+    var nameEl = document.getElementById('theme-detail-name');
+    var authorEl = document.getElementById('theme-detail-author');
+    var descEl = document.getElementById('theme-detail-desc');
+    var priceEl = document.getElementById('theme-detail-price');
+    var buyBtn = document.getElementById('theme-detail-buy-btn');
+    var installBtn = document.getElementById('theme-detail-install-btn');
+    var restoreBtn = document.getElementById('theme-detail-restore-btn');
+
+    if (nameEl) nameEl.textContent = theme.name;
+    if (authorEl) authorEl.innerHTML = (theme.author || '未知') + ' &middot; ' + (theme.type || '官方');
+    if (descEl) descEl.textContent = theme.description || '暂无描述';
+    if (priceEl) priceEl.textContent = theme.price > 0 ? '¥' + theme.price.toFixed(2) : '免费';
+
+    var installed = ThemeEngine.isInstalled(theme.id);
+    if (buyBtn) {
+        buyBtn.style.display = (theme.price > 0 && !installed) ? 'inline-block' : 'none';
+        buyBtn.onclick = function() { buyTheme(theme); };
+    }
+    if (installBtn) {
+        installBtn.style.display = (theme.price === 0 || installed) ? 'inline-block' : 'none';
+        installBtn.textContent = installed ? '安装' : '免费安装';
+        installBtn.onclick = function() { installTheme(theme); };
+    }
+    if (restoreBtn) {
+        restoreBtn.style.display = 'inline-block';
+        restoreBtn.onclick = function() { showRestoreOverlay(); };
+    }
+    overlay.classList.remove('hidden');
+}
+
+function closeThemeDetail() {
+    var overlay = document.getElementById('theme-detail-overlay');
+    if (overlay) overlay.classList.add('hidden');
+    _currentDetailTheme = null;
+}
+
+var _purchaseTimer = null;
+
+async function buyTheme(theme) {
+    var purchaseOverlay = document.getElementById('purchase-overlay');
+    if (!purchaseOverlay) return;
+    closeThemeDetail();
+    document.getElementById('purchase-step-email').classList.remove('hidden');
+    document.getElementById('purchase-step-qr').classList.add('hidden');
+    document.getElementById('purchase-submit-btn').disabled = false;
+    document.getElementById('purchase-submit-btn').textContent = '确认购买';
+    document.getElementById('purchase-email').value = '';
+    purchaseOverlay.classList.remove('hidden');
+
+    var submitBtn = document.getElementById('purchase-submit-btn');
+    var newBtn = submitBtn.cloneNode(true);
+    submitBtn.parentNode.replaceChild(newBtn, submitBtn);
+
+    newBtn.addEventListener('click', async function() {
+        var email = document.getElementById('purchase-email').value.trim();
+        if (!email) {
+            showToast('请输入邮箱地址', 'error');
+            return;
+        }
+        var payment = document.getElementById('purchase-payment').value;
+        newBtn.disabled = true;
+        newBtn.textContent = '处理中...';
+        try {
+            var resp = await fetch(STORE_API + '/v1/themes/' + theme.id + '/buy', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ email: email, payment: payment })
+            });
+            if (!resp.ok) {
+                var errData = await resp.json().catch(function() { return {}; });
+                throw new Error(errData.detail || '购买失败');
+            }
+            var result = await resp.json();
+            document.getElementById('purchase-step-email').classList.add('hidden');
+            document.getElementById('purchase-step-qr').classList.remove('hidden');
+            var paymentLabel = document.getElementById('purchase-payment-label');
+            if (paymentLabel) paymentLabel.textContent = payment === 'wechat' ? '微信' : '支付宝';
+            var qrImg = document.getElementById('purchase-qr-img');
+            if (qrImg && result.qr_code) {
+                qrImg.src = result.qr_code;
+            }
+            var purchaseId = result.purchase_id || result.id;
+            if (purchaseId) {
+                pollPaymentStatus(purchaseId, theme);
+            }
+        } catch (e) {
+            showToast('购买错误: ' + e.message, 'error');
+            newBtn.disabled = false;
+            newBtn.textContent = '确认购买';
+        }
     });
-  }
+}
+
+function pollPaymentStatus(purchaseId, theme) {
+    if (_purchaseTimer) {
+        clearInterval(_purchaseTimer);
+        _purchaseTimer = null;
+    }
+    var statusEl = document.getElementById('purchase-status');
+    _purchaseTimer = setInterval(async function() {
+        try {
+            var resp = await fetch(STORE_API + '/v1/purchases/' + purchaseId);
+            if (!resp.ok) return;
+            var result = await resp.json();
+            if (result.status === 'completed' || result.status === 'paid') {
+                clearInterval(_purchaseTimer);
+                _purchaseTimer = null;
+                if (statusEl) statusEl.textContent = '支付成功！正在安装主题...';
+                ThemeEngine.install(theme);
+                setTimeout(function() {
+                    document.getElementById('purchase-overlay').classList.add('hidden');
+                }, 1000);
+            } else if (result.status === 'failed' || result.status === 'expired') {
+                clearInterval(_purchaseTimer);
+                _purchaseTimer = null;
+                if (statusEl) statusEl.textContent = '支付失败或已过期';
+                showToast('支付失败', 'error');
+            } else {
+                if (statusEl) statusEl.textContent = '等待支付... (' + (result.status || 'pending') + ')';
+            }
+        } catch (e) {
+            console.warn('[Purchase] Poll error:', e);
+        }
+    }, 3000);
+}
+
+function cancelPurchase() {
+    if (_purchaseTimer) {
+        clearInterval(_purchaseTimer);
+        _purchaseTimer = null;
+    }
+    document.getElementById('purchase-overlay').classList.add('hidden');
+    document.getElementById('purchase-step-email').classList.remove('hidden');
+    document.getElementById('purchase-step-qr').classList.add('hidden');
+}
+
+async function installTheme(theme) {
+    closeThemeDetail();
+    try {
+        var resp = await fetch(STORE_API + '/v1/themes/' + theme.id);
+        if (resp.ok) {
+            var fullTheme = await resp.json();
+            ThemeEngine.install(fullTheme);
+            return;
+        }
+    } catch (e) {
+        console.warn('[Install] Cannot fetch theme from store:', e);
+    }
+    if (theme.id === 'builtin-constructivist') {
+        ThemeEngine.resetToDefault();
+        ThemeEngine.installedThemes['builtin-constructivist'] = {
+            name: theme.name || '苏维埃全主义构成',
+            author: 'Pulse Team',
+            type: '官方',
+            installedAt: Date.now(),
+        };
+        localStorage.setItem('pulse-installed-themes', JSON.stringify(ThemeEngine.installedThemes));
+        showToast('已激活默认主题', 'success');
+        return;
+    }
+    showToast('无法获取主题文件。请检查商店连接。', 'error');
+}
+
+// ══════════════════════════════════════════════════
+//  Restore Purchases (M6.5)
+// ══════════════════════════════════════════════════
+
+function showRestoreOverlay() {
+    closeThemeDetail();
+    var overlay = document.getElementById('restore-overlay');
+    if (!overlay) return;
+    document.getElementById('restore-step-email').classList.remove('hidden');
+    document.getElementById('restore-step-verify').classList.add('hidden');
+    document.getElementById('restore-step-list').classList.add('hidden');
+    document.getElementById('restore-email').value = '';
+    document.getElementById('restore-code').value = '';
+    overlay.classList.remove('hidden');
+}
+
+function closeRestoreOverlay() {
+    document.getElementById('restore-overlay').classList.add('hidden');
+}
+
+async function sendRestoreCode() {
+    var email = document.getElementById('restore-email').value.trim();
+    if (!email) {
+        showToast('请输入邮箱地址', 'error');
+        return;
+    }
+    var btn = document.getElementById('restore-send-code-btn');
+    btn.disabled = true;
+    btn.textContent = '发送中...';
+    try {
+        var resp = await fetch(STORE_API + '/v1/restore', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ email: email })
+        });
+        if (!resp.ok) {
+            var errData = await resp.json().catch(function() { return {}; });
+            throw new Error(errData.detail || '发送失败');
+        }
+        document.getElementById('restore-step-email').classList.add('hidden');
+        document.getElementById('restore-step-verify').classList.remove('hidden');
+        showToast('验证码已发送到 ' + email, 'success');
+    } catch (e) {
+        showToast('错误: ' + e.message, 'error');
+    } finally {
+        btn.disabled = false;
+        btn.textContent = '发送验证码';
+    }
+}
+
+async function verifyRestoreCode() {
+    var email = document.getElementById('restore-email').value.trim();
+    var code = document.getElementById('restore-code').value.trim();
+    if (!code) {
+        showToast('请输入验证码', 'error');
+        return;
+    }
+    var btn = document.getElementById('restore-verify-btn');
+    btn.disabled = true;
+    btn.textContent = '验证中...';
+    try {
+        var resp = await fetch(STORE_API + '/v1/restore/verify', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ email: email, code: code })
+        });
+        if (!resp.ok) {
+            var errData = await resp.json().catch(function() { return {}; });
+            throw new Error(errData.detail || '验证失败');
+        }
+        var result = await resp.json();
+        var purchasedThemes = result.themes || [];
+        document.getElementById('restore-step-verify').classList.add('hidden');
+        document.getElementById('restore-step-list').classList.remove('hidden');
+        var listEl = document.getElementById('restore-theme-list');
+        listEl.innerHTML = '';
+        if (purchasedThemes.length === 0) {
+            listEl.innerHTML = '<p style="color:var(--color-grey-50);">该邮箱没有已购主题</p>';
+            return;
+        }
+        for (var i = 0; i < purchasedThemes.length; i++) {
+            var t = purchasedThemes[i];
+            var item = document.createElement('div');
+            item.className = 'restore-theme-item';
+            item.innerHTML =
+                '<div>' +
+                    '<div class="restore-theme-name">' + escapeHtml(t.name) + '</div>' +
+                    '<div class="restore-theme-author">' + escapeHtml(t.author || '') + '</div>' +
+                '</div>' +
+                '<button class="btn-primary" style="padding:6px 16px;font-size:12px;">安装</button>';
+            (function(themeData) {
+                item.querySelector('button').addEventListener('click', async function() {
+                    ThemeEngine.install(themeData);
+                    document.getElementById('restore-overlay').classList.add('hidden');
+                });
+            })(t);
+            listEl.appendChild(item);
+        }
+    } catch (e) {
+        showToast('错误: ' + e.message, 'error');
+    } finally {
+        btn.disabled = false;
+        btn.textContent = '验证';
+    }
+}
+
+function initThemeSelector() {
+    var sel = document.getElementById('theme-selector');
+    if (!sel) return;
+    sel.addEventListener('change', function() {
+        var val = sel.value;
+        if (val === 'builtin-constructivist') {
+            ThemeEngine.resetToDefault();
+        } else if (ThemeEngine.installedThemes[val]) {
+            fetch(STORE_API + '/v1/themes/' + val)
+                .then(function(r) { return r.json(); })
+                .then(function(theme) { ThemeEngine.activate(theme); })
+                .catch(function() {
+                    showToast('无法重新加载主题', 'error');
+                    ThemeEngine.resetToDefault();
+                });
+        }
+    });
+}
+
+function initMarketplaceOnTab() {
+    var settingsTab = document.querySelector('[data-tab=settings]');
+    if (settingsTab) {
+        settingsTab.addEventListener('click', function() {
+            var grid = document.getElementById('marketplace-grid');
+            if (grid && grid.children.length === 0) {
+                loadMarketplace();
+            }
+        });
+    }
+}
+
+function initMarketplaceOverlayButtons() {
+    var closeBtn = document.getElementById('theme-detail-close');
+    if (closeBtn) closeBtn.addEventListener('click', closeThemeDetail);
+    var cancelBtn = document.getElementById('purchase-cancel-btn');
+    if (cancelBtn) cancelBtn.addEventListener('click', cancelPurchase);
+    var restoreCloseBtn = document.getElementById('restore-close-btn');
+    if (restoreCloseBtn) restoreCloseBtn.addEventListener('click', closeRestoreOverlay);
+    var sendCodeBtn = document.getElementById('restore-send-code-btn');
+    if (sendCodeBtn) sendCodeBtn.addEventListener('click', sendRestoreCode);
+    var verifyBtn = document.getElementById('restore-verify-btn');
+    if (verifyBtn) verifyBtn.addEventListener('click', verifyRestoreCode);
+
+    document.querySelectorAll('.overlay').forEach(function(el) {
+        el.addEventListener('click', function(e) {
+            if (e.target === el) {
+                el.classList.add('hidden');
+                if (el.id === 'purchase-overlay') cancelPurchase();
+            }
+        });
+    });
+}
+
+function escapeHtml(str) {
+    if (!str) return '';
+    var div = document.createElement('div');
+    div.appendChild(document.createTextNode(str));
+    return div.innerHTML;
 }
 
 // --- Devices ---
@@ -2800,9 +2694,14 @@ function initPhase45() {
   initSetupForm();
   initSettingsForm();
   initAutostartToggle();
-  initAutoReconnectToggle();
   initDeviceForm();
   checkFirstRun();
+
+  // Theme Engine + Marketplace (M4.1 / M6.5)
+  ThemeEngine.init();
+  initThemeSelector();
+  initMarketplaceOnTab();
+  initMarketplaceOverlayButtons();
   var hardwareTab = document.querySelector("[data-tab=hardware]");
   if (hardwareTab) {
     hardwareTab.addEventListener('click', function() { setTimeout(loadDevices, 100); });
@@ -2813,129 +2712,6 @@ function initPhase45() {
     document.body.appendChild(tc);
   }
 }
-
-// ── Theme Engine ──────────────────────────────────────
-function camelToKebab(str) {
-    return str.replace(/([A-Z])/g, '-$1').toLowerCase();
-}
-
-// ── Theme UI ────────────────────────────────────
-function initThemeSelector() {
-    var sel = $('#theme-select');
-    if (!sel) return;
-    // Remove existing listeners by cloning
-    // Using change event
-    sel.onchange = function() {
-        ThemeEngine.activate(this.value);
-    };
-    // Sync with current active theme
-    if (ThemeEngine.activeTheme) {
-        sel.value = ThemeEngine.activeTheme;
-    }
-}
-
-function initMarketplace() {
-    var grid = $('#marketplace-grid');
-    if (!grid) return;
-    grid.addEventListener('click', function(e) {
-        var item = e.target.closest('.marketplace-item');
-        if (item) {
-            var themeName = item.getAttribute('data-theme');
-            if (themeName) {
-                ThemeEngine.activate(themeName);
-                // Update dropdown to match
-                var sel = $('#theme-select');
-                if (sel) sel.value = themeName;
-            }
-        }
-    });
-}
-
-const ThemeEngine = {
-    activeTheme: null,
-    themes: {},
-    builtinThemePath: 'themes/constructivist/theme.json',
-
-    async loadThemeData(path) {
-        if (this.themes[path]) return this.themes[path];
-        try {
-            var resp = await fetch(path);
-            if (!resp.ok) throw new Error('HTTP ' + resp.status);
-            var data = await resp.json();
-            this.themes[path] = data;
-            return data;
-        } catch (e) {
-            console.warn('[Theme] Failed to load:', path, e);
-            return null;
-        }
-    },
-
-    async activate(name) {
-        // Check cache by name
-        var theme = this.themes[name];
-        if (!theme) {
-            var path = name === 'constructivist'
-                ? this.builtinThemePath
-                : 'themes/' + name + '/theme.json';
-            theme = await this.loadThemeData(path);
-            if (!theme) {
-                console.warn('[Theme] Theme not found:', name);
-                return;
-            }
-            this.themes[name] = theme;
-        }
-
-        // Apply tokens as CSS variables on :root
-        var tokens = theme.tokens || {};
-        var root = document.documentElement;
-        for (var key in tokens) {
-            if (Object.prototype.hasOwnProperty.call(tokens, key)) {
-                var cssVar = '--' + camelToKebab(key);
-                root.style.setProperty(cssVar, tokens[key]);
-            }
-        }
-
-        // Update Chart.js global defaults
-        if (tokens.colorTextSecondary) {
-            Chart.defaults.color = tokens.colorTextSecondary;
-        }
-        if (tokens.fontMono) {
-            Chart.defaults.font.family = tokens.fontMono;
-        }
-
-        // Redraw all Chart.js instances (non-animated)
-        for (var chartKey in state.charts) {
-            if (state.charts[chartKey] && typeof state.charts[chartKey].update === 'function') {
-                state.charts[chartKey].update('none');
-            }
-        }
-
-        // Redraw widget mini charts
-        for (var wid in WidgetEngine._widgetCharts) {
-            if (WidgetEngine._widgetCharts[wid] && typeof WidgetEngine._widgetCharts[wid].update === 'function') {
-                WidgetEngine._widgetCharts[wid].update('none');
-            }
-        }
-
-        // Persist preference
-        localStorage.setItem('pulse-active-theme', name);
-        this.activeTheme = name;
-
-        // Update theme indicator if present
-        var indicator = document.getElementById('themeIndicator');
-        if (indicator) {
-            indicator.textContent = theme.name || name;
-        }
-
-        console.log('[Theme] Activated:', name);
-    },
-
-    async init() {
-        var saved = localStorage.getItem('pulse-active-theme');
-        var name = saved || 'constructivist';
-        await this.activate(name);
-    }
-};
 
 // Start when DOM is ready
 if (document.readyState === 'loading') {
