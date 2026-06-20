@@ -48,170 +48,132 @@
 
         <!-- ─── TAB: DASHBOARD ─── -->
         <section class="tab-content active" id="tab-dashboard">
-            <!-- Over-limit alert bar -->
-            <div class="alert-bar hidden" id="limitAlert">
-                <span class="alert-wedge">▶</span>
-                <span class="alert-text" id="limitAlertText">消费超出每日限额！</span>
-                <span class="alert-close" id="limitAlertClose">✕</span>
+            <!-- Widget Toolbar -->
+            <div class="widget-toolbar">
+                <span class="widget-edit-hint">可配置组件仪表盘</span>
+                <div id="widgetEditActions" class="hidden" style="display: flex; gap: 8px;">
+                    <button class="btn-secondary" id="widgetDoneBtn">完成</button>
+                </div>
+                <button class="btn-secondary" id="widgetEditBtn">编辑</button>
             </div>
 
-            <!-- Deepseek Hero Area -->
-            <div class="hero-grid">
-                <!-- KPI: Today's Tokens -->
-                <div class="card hero-kpi">
-                    <div class="card-header red">今日 TOKEN 用量</div>
-                    <div class="kpi-large" id="todayTokens">—</div>
-                    <div class="kpi-trend" id="tokenTrend">
-                        <span class="trend-value">—</span>
-                        <span class="trend-label">vs 昨日</span>
-                    </div>
-                    <div class="kpi-meta">
-                        <span>输入: <strong id="todayInput">—</strong></span>
-                        <span>输出: <strong id="todayOutput">—</strong></span>
-                    </div>
-                </div>
+            <!-- Widget Grid -->
+            <div class="widget-grid" id="widgetGrid"></div>
 
-                <!-- KPI: Today's Cost + Limit -->
-                <div class="card hero-kpi" id="costCard">
-                    <div class="card-header red">今日消费</div>
-                    <div class="kpi-large" id="todayCost">¥0.00</div>
-                    <div class="limit-bar">
-                        <div class="limit-bar-track">
-                            <div class="limit-bar-fill" id="costLimitFill" style="width: 0%"></div>
-                        </div>
-                        <span class="limit-label" id="costLimitLabel">限额 ¥5.00</span>
-                    </div>
-                    <div class="kpi-meta">
-                        <span>缓存: <strong id="todayCached">—</strong></span>
-                        <span>缓存率: <strong id="cacheRate">—</strong></span>
-                    </div>
-                </div>
-
-                <!-- KPI: Balance -->
-                <div class="card hero-kpi">
-                    <div class="card-header">账户余额</div>
-                    <div class="kpi-large" id="accountBalance">¥—</div>
-                    <div class="kpi-meta">
-                        <span>本月总消耗: <strong id="monthCost">—</strong></span>
-                        <span>本周: <strong id="weekCost">—</strong></span>
-                    </div>
-                </div>
-
-                <!-- KPI: Model Count -->
-                <div class="card hero-kpi">
-                    <div class="card-header">活跃模型</div>
-                    <div class="kpi-large" id="activeModels">—</div>
-                    <div class="kpi-meta" id="modelList">等待数据...</div>
-                </div>
-            </div>
-
-            <!-- Charts Area -->
-            <div class="charts-grid">
-                <div class="card chart-wide">
-                    <div class="card-header">TOKEN 用量趋势 (7日)</div>
-                    <div class="chart-container">
-                        <canvas id="tokenTrendChart"></canvas>
-                    </div>
-                </div>
-                <div class="card chart-narrow">
-                    <div class="card-header">分模型用量</div>
-                    <div class="chart-container">
-                        <canvas id="modelBreakdownChart"></canvas>
-                    </div>
-                </div>
-                <div class="card chart-narrow">
-                    <div class="card-header">缓存命中率</div>
-                    <div class="chart-container">
-                        <canvas id="cacheRateChart"></canvas>
-                    </div>
-                </div>
-                <div class="card chart-narrow">
-                    <div class="card-header">消费趋势</div>
-                    <div class="chart-container">
-                        <canvas id="costTrendChart"></canvas>
-                    </div>
-                </div>
-            </div>
-
-            <!-- Bottom: System Status Bar -->
-            <div class="sys-bar">
-                <div class="sys-item">
-                    <span class="sys-label">CPU</span>
-                    <div class="sys-bar-track">
-                        <div class="sys-bar-fill" id="sysCpuFill" style="width: 0%"></div>
-                    </div>
-                    <span class="sys-value" id="sysCpuVal">0%</span>
-                </div>
-                <div class="sys-item">
-                    <span class="sys-label">内存</span>
-                    <div class="sys-bar-track">
-                        <div class="sys-bar-fill" id="sysMemFill" style="width: 0%"></div>
-                    </div>
-                    <span class="sys-value" id="sysMemVal">0%</span>
-                </div>
-                <div class="sys-item">
-                    <span class="sys-label">磁盘</span>
-                    <div class="sys-bar-track">
-                        <div class="sys-bar-fill" id="sysDiskFill" style="width: 0%"></div>
-                    </div>
-                    <span class="sys-value" id="sysDiskVal">0%</span>
-                </div>
-                <div class="sys-item">
-                    <span class="sys-label">GPU</span>
-                    <div class="sys-bar-track">
-                        <div class="sys-bar-fill" id="sysGpuFill" style="width: 0%"></div>
-                    </div>
-                    <span class="sys-value" id="sysGpuVal">—</span>
-                </div>
-                <div class="sys-item">
-                    <span class="sys-label">温度</span>
-                    <span class="sys-value" id="sysTemp">—</span>
-                </div>
-                <div class="sys-item">
-                    <span class="sys-label">↑↓</span>
-                    <span class="sys-value mono" id="sysNet">—</span>
-                </div>
-                <div class="sys-item sys-update">
-                    <span class="sys-label" id="sysLastUpdate">—</span>
-                </div>
+            <!-- Widget Library (shown in edit mode) -->
+            <div class="widget-library hidden" id="widgetLibrary">
+                <div class="card-header">添加组件</div>
+                <div class="widget-library-grid" id="widgetLibGrid"></div>
             </div>
         </section>
 
         <!-- ─── TAB: HARDWARE ─── -->
         <section class="tab-content" id="tab-hardware">
-            <div class="system-grid">
-                <div class="card chart-wide">
-                    <div class="card-header">CPU & 内存实时趋势</div>
-                    <div class="chart-container">
-                        <canvas id="sysCpuChart"></canvas>
+            <!-- Status Banner -->
+            <div class="hw-banner" id="hwBanner">
+                <span class="hw-banner-icon">●</span>
+                <span class="hw-banner-text" id="hwBannerText">等待系统数据...</span>
+            </div>
+
+            <!-- LAN Device Bar -->
+            <div class="hw-lan-bar" id="hwLanBar">
+                <div class="hw-lan-header">
+                    <span>局域网设备</span>
+                    <button class="btn-secondary" id="hwAddDeviceBtn">+ 添加设备</button>
+                </div>
+                <div class="hw-lan-scroll" id="hwLanScroll"></div>
+                <div class="empty-state" id="hwLanEmpty">暂无设备 · 插件页面启用 LAN 监控后显示</div>
+            </div>
+
+            <!-- Row 1: CPU + Memory -->
+            <div class="hw-row">
+                <div class="card hw-card">
+                    <div class="card-header red">CPU — 每核负载</div>
+                    <div class="chart-container hw-chart">
+                        <canvas id="hwCpuCoresChart"></canvas>
+                    </div>
+                    <div class="hw-stats" id="hwCpuStats">
+                        <span>CPU: <strong>—</strong></span>
+                        <span>核心: <strong>—</strong></span>
+                        <span>频率: <strong>—</strong></span>
                     </div>
                 </div>
-                <div class="card chart-narrow">
-                    <div class="card-header">GPU</div>
-                    <div class="chart-container">
-                        <canvas id="sysGpuChart"></canvas>
+                <div class="card hw-card">
+                    <div class="card-header">内存</div>
+                    <div class="chart-container hw-chart">
+                        <canvas id="hwMemChart"></canvas>
                     </div>
-                </div>
-                <div class="card chart-narrow">
-                    <div class="card-header">磁盘使用率</div>
-                    <div class="chart-container">
-                        <canvas id="sysDiskChart"></canvas>
-                    </div>
-                </div>
-                <div class="card chart-narrow">
-                    <div class="card-header">系统信息</div>
-                    <div class="sys-info" id="sysInfo">
-                        <div class="info-row"><span>主机名</span><span id="infoHostname">—</span></div>
-                        <div class="info-row"><span>系统</span><span id="infoOS">—</span></div>
-                        <div class="info-row"><span>运行时间</span><span id="infoUptime">—</span></div>
-                        <div class="info-row"><span>进程数</span><span id="infoProcesses">—</span></div>
+                    <div class="hw-stats" id="hwMemStats">
+                        <span>已用: <strong>—</strong></span>
+                        <span>可用: <strong>—</strong></span>
+                        <span>总量: <strong>—</strong></span>
                     </div>
                 </div>
             </div>
 
-            <!-- LAN Devices placeholder (M5 will populate) -->
-            <div class="card" style="margin-top: var(--space-2);">
-                <div class="card-header">局域网设备</div>
+            <!-- Row 2: Disk + GPU -->
+            <div class="hw-row">
+                <div class="card hw-card">
+                    <div class="card-header">磁盘使用率</div>
+                    <div class="chart-container hw-chart">
+                        <canvas id="hwDiskChart"></canvas>
+                    </div>
+                    <div class="hw-stats" id="hwDiskStats">
+                        <span>磁盘: <strong>—</strong></span>
+                        <span>已用: <strong>—</strong></span>
+                        <span>总量: <strong>—</strong></span>
+                    </div>
+                </div>
+                <div class="card hw-card">
+                    <div class="card-header red">GPU 温度</div>
+                    <div class="chart-container hw-chart">
+                        <canvas id="hwGpuTempChart"></canvas>
+                    </div>
+                    <div class="hw-stats" id="hwGpuStats">
+                        <span>GPU: <strong>—</strong></span>
+                        <span>温度: <strong>—</strong></span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Row 3: Network + Battery -->
+            <div class="hw-row">
+                <div class="card hw-card">
+                    <div class="card-header">网络流量</div>
+                    <div class="chart-container hw-chart">
+                        <canvas id="hwNetChart"></canvas>
+                    </div>
+                    <div class="hw-stats" id="hwNetStats">
+                        <span>↓ 接收: <strong>—</strong></span>
+                        <span>↑ 发送: <strong>—</strong></span>
+                    </div>
+                </div>
+                <div class="card hw-card" id="hwBatteryCard">
+                    <div class="card-header">电池</div>
+                    <div class="chart-container hw-chart">
+                        <canvas id="hwBatteryChart"></canvas>
+                    </div>
+                    <div class="hw-stats" id="hwBatteryStats">
+                        <span>电量: <strong>—</strong></span>
+                        <span>状态: <strong>—</strong></span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- System Info Card -->
+            <div class="card hw-info-card">
+                <div class="card-header">系统信息</div>
+                <div class="sys-info" id="sysInfo">
+                    <div class="info-row"><span>主机名</span><span id="infoHostname">—</span></div>
+                    <div class="info-row"><span>系统</span><span id="infoOS">—</span></div>
+                    <div class="info-row"><span>运行时间</span><span id="infoUptime">—</span></div>
+                    <div class="info-row"><span>进程数</span><span id="infoProcesses">—</span></div>
+                </div>
+            </div>
+
+            <!-- Device Management Card -->
+            <div class="card">
+                <div class="card-header">设备管理</div>
                 <div id="device-list"></div>
                 <div id="device-list-empty" class="empty-state">
                     <div class="icon">⚡</div>

@@ -34,6 +34,690 @@ const state = {
     charts: {},
     pendingCsvFile: null,
     config: {},
+    netHistory: { timestamps: [], recv: [], sent: [] },
+    lastDiskData: null,
+    lastCpuPerCore: null,
+    lastMemData: null,
+    lastGpuTemp: null,
+    lastBatteryData: null,
+};
+
+// ── Widget Registry ──────────────────────────────────
+var WidgetRegistry = {
+    cpu:     { name: 'CPU',      icon: '⚙', sizes: ['S', 'M'],     defaultSize: 'S', source: 'system' },
+    memory:  { name: '内存',      icon: '▦', sizes: ['S', 'M'],     defaultSize: 'S', source: 'system' },
+    disk:    { name: '磁盘',      icon: '◈', sizes: ['S', 'M', 'L'], defaultSize: 'M', source: 'system' },
+    network: { name: '网络',      icon: '⬡', sizes: ['M', 'L'],     defaultSize: 'M', source: 'system' },
+    gpu:     { name: 'GPU',      icon: '◆', sizes: ['S', 'M'],     defaultSize: 'S', source: 'system' },
+    balance: { name: '余额',      icon: '¥', sizes: ['S', 'M'],     defaultSize: 'S', source: 'deepseek' },
+    tokens:  { name: 'Token',    icon: '⬒', sizes: ['S', 'M'],     defaultSize: 'S', source: 'deepseek' },
+    cache:   { name: '缓存',      icon: '◎', sizes: ['S', 'M'],     defaultSize: 'S', source: 'deepseek' },
+    uptime:  { name: '运行时间',   icon: '◷', sizes: ['S'],         defaultSize: 'S', source: 'system' },
+};
+
+// ── Widget Engine ────────────────────────────────────
+var WidgetEngine = {
+    widgetIdCounter: 0,
+    activeWidgets: [],
+    isEditing: false,
+    layoutKey: 'pulse-widget-layout',
+    _widgetCharts: {},
+    _cpuHistory: {},
+    _netRecvHistory: {},
+    _netSentHistory: {},
+    _uptimeSecs: {},
+
+    _ensureMiniChart: function(w, canvasId, config) {
+        if (this._widgetCharts[w.id]) return this._widgetCharts[w.id];
+        var ctx = document.getElementById(canvasId);
+        if (!ctx) return null;
+        var chart = new Chart(ctx, config);
+        this._widgetCharts[w.id] = chart;
+        return chart;
+    },
+
+    loadLayout: function() {
+        var raw = localStorage.getItem(this.layoutKey);
+        if (raw) {
+            try {
+                var parsed = JSON.parse(raw);
+                if (Array.isArray(parsed) && parsed.length > 0) {
+                    this.activeWidgets = parsed;
+                    // Restore counter
+                    var maxId = 0;
+                    for (var i = 0; i < parsed.length; i++) {
+                        var num = parseInt(parsed[i].id.replace('w', ''), 10);
+                        if (num > maxId) maxId = num;
+                    }
+                    this.widgetIdCounter = maxId;
+                    return;
+                }
+            } catch (e) { /* fall through to default */ }
+        }
+        this.activeWidgets = this.getDefaultLayout();
+        this.widgetIdCounter = this.activeWidgets.length;
+        this.saveLayout();
+    },
+
+    saveLayout: function() {
+        localStorage.setItem(this.layoutKey, JSON.stringify(this.activeWidgets));
+    },
+
+    getDefaultLayout: function() {
+        var id = 0;
+        return [
+            { id: 'w' + (++id), type: 'cpu',     size: 'S' },
+            { id: 'w' + (++id), type: 'memory',  size: 'S' },
+            { id: 'w' + (++id), type: 'disk',    size: 'M' },
+            { id: 'w' + (++id), type: 'network', size: 'M' },
+            { id: 'w' + (++id), type: 'balance', size: 'S' },
+        ];
+    },
+
+    createWidgetElement: function(w) {
+        var spec = WidgetRegistry[w.type];
+        if (!spec) return null;
+
+        var el = document.createElement('div');
+        el.className = 'widget size-' + w.size;
+        el.setAttribute('data-id', w.id);
+        el.setAttribute('draggable', 'true');
+
+        var title = spec.name;
+
+        // Determine if this widget needs a mini chart canvas
+        var needsChart = false;
+        if (w.type === 'cpu' && w.size === 'S') needsChart = true;
+        if (w.type === 'memory' && w.size === 'S') needsChart = true;
+        if (w.type === 'disk' && w.size === 'M') needsChart = true;
+        if (w.type === 'network' && w.size === 'M') needsChart = true;
+
+        var chartHtml = needsChart
+            ? '<canvas id="wchart-' + w.id + '" class="widget-chart" style="height:45%;"></canvas>'
+            : '';
+
+        el.innerHTML =
+            '<div class="widget-card">' +
+                '<div class="card-header">' + title + '</div>' +
+                '<div class="widget-body">' +
+                    '<div class="widget-value" id="wv-' + w.id + '">—</div>' +
+                    '<div class="widget-unit" id="wu-' + w.id + '"></div>' +
+                    chartHtml +
+                '</div>' +
+            '</div>' +
+            '<div class="widget-edit-overlay">' +
+                '<button class="widget-edit-btn widget-size-btn" title="切换尺寸">' + w.size + '</button>' +
+                '<button class="widget-edit-btn widget-del-btn" title="删除">✕</button>' +
+            '</div>';
+
+        // Delete button
+        var delBtn = el.querySelector('.widget-del-btn');
+        var self = this;
+        delBtn.addEventListener('click', function(e) {
+            e.stopPropagation();
+            self.removeWidget(w.id);
+        });
+
+        // Size toggle button
+        var sizeBtn = el.querySelector('.widget-size-btn');
+        sizeBtn.addEventListener('click', function(e) {
+            e.stopPropagation();
+            var sizes = spec.sizes;
+            var idx = sizes.indexOf(w.size);
+            var next = sizes[(idx + 1) % sizes.length];
+            self.setSize(w.id, next);
+        });
+
+        // Drag events
+        el.addEventListener('dragstart', function(e) {
+            if (!self.isEditing) { e.preventDefault(); return; }
+            el.classList.add('dragging');
+            e.dataTransfer.effectAllowed = 'move';
+            e.dataTransfer.setData('text/plain', w.id);
+        });
+
+        el.addEventListener('dragend', function() {
+            el.classList.remove('dragging');
+            // Remove drag-over from all
+            var grid = document.getElementById('widgetGrid');
+            if (grid) {
+                var children = grid.children;
+                for (var i = 0; i < children.length; i++) {
+                    children[i].classList.remove('drag-over');
+                }
+            }
+        });
+
+        return el;
+    },
+
+    renderAll: function() {
+        var grid = document.getElementById('widgetGrid');
+        if (!grid) return;
+
+        // Destroy old mini chart instances
+        var self = this;
+        Object.values(this._widgetCharts).forEach(function(c) { if (c) c.destroy(); });
+        this._widgetCharts = {};
+
+        grid.innerHTML = '';
+
+        for (var i = 0; i < this.activeWidgets.length; i++) {
+            var w = this.activeWidgets[i];
+            var el = this.createWidgetElement(w);
+            if (!el) continue;
+
+            if (this.isEditing) el.classList.add('editing');
+
+            grid.appendChild(el);
+        }
+
+        this._initDragDrop(grid);
+    },
+
+    addWidget: function(type) {
+        var spec = WidgetRegistry[type];
+        if (!spec) return;
+        var w = {
+            id: 'w' + String(++this.widgetIdCounter),
+            type: type,
+            size: spec.defaultSize
+        };
+        this.activeWidgets.push(w);
+        this.renderAll();
+        this.saveLayout();
+        this.updateLibrary();
+    },
+
+    removeWidget: function(id) {
+        this.activeWidgets = this.activeWidgets.filter(function(w) { return w.id !== id; });
+        this.renderAll();
+        this.saveLayout();
+        this.updateLibrary();
+    },
+
+    setSize: function(id, size) {
+        for (var i = 0; i < this.activeWidgets.length; i++) {
+            if (this.activeWidgets[i].id === id) {
+                this.activeWidgets[i].size = size;
+                break;
+            }
+        }
+        this.renderAll();
+        this.saveLayout();
+    },
+
+    enterEditMode: function() {
+        this.isEditing = true;
+
+        var actions = document.getElementById('widgetEditActions');
+        if (actions) actions.classList.remove('hidden');
+        var editBtn = document.getElementById('widgetEditBtn');
+        if (editBtn) editBtn.classList.add('hidden');
+        var lib = document.getElementById('widgetLibrary');
+        if (lib) lib.classList.remove('hidden');
+
+        // Add editing class to all widgets
+        var grid = document.getElementById('widgetGrid');
+        if (grid) {
+            var children = grid.children;
+            for (var i = 0; i < children.length; i++) {
+                children[i].classList.add('editing');
+            }
+        }
+
+        this.updateLibrary();
+    },
+
+    exitEditMode: function() {
+        this.isEditing = false;
+
+        var actions = document.getElementById('widgetEditActions');
+        if (actions) actions.classList.add('hidden');
+        var editBtn = document.getElementById('widgetEditBtn');
+        if (editBtn) editBtn.classList.remove('hidden');
+        var lib = document.getElementById('widgetLibrary');
+        if (lib) lib.classList.add('hidden');
+
+        // Remove editing class
+        var grid = document.getElementById('widgetGrid');
+        if (grid) {
+            var children = grid.children;
+            for (var i = 0; i < children.length; i++) {
+                children[i].classList.remove('editing');
+            }
+        }
+    },
+
+    updateLibrary: function() {
+        var libGrid = document.getElementById('widgetLibGrid');
+        if (!libGrid) return;
+        libGrid.innerHTML = '';
+
+        var addedTypes = {};
+        for (var i = 0; i < this.activeWidgets.length; i++) {
+            addedTypes[this.activeWidgets[i].type] = true;
+        }
+
+        var types = Object.keys(WidgetRegistry);
+        var self = this;
+        for (var j = 0; j < types.length; j++) {
+            var type = types[j];
+            var spec = WidgetRegistry[type];
+            var item = document.createElement('div');
+            item.className = 'widget-lib-item';
+            if (addedTypes[type]) item.classList.add('added');
+
+            var sizesStr = spec.sizes.join('/');
+
+            item.innerHTML =
+                '<span class="wli-icon">' + spec.icon + '</span>' +
+                '<span class="wli-name">' + spec.name + ' (' + sizesStr + ')</span>';
+
+            if (!addedTypes[type]) {
+                item.addEventListener('click', function(t) {
+                    return function() { self.addWidget(t); };
+                }(type));
+            }
+
+            libGrid.appendChild(item);
+        }
+    },
+
+    setVisibility: function(type, visible) {
+        var found = false;
+        for (var i = 0; i < this.activeWidgets.length; i++) {
+            if (this.activeWidgets[i].type === type) {
+                found = true;
+                break;
+            }
+        }
+        if (visible && !found) {
+            this.addWidget(type);
+        } else if (!visible && found) {
+            this.activeWidgets = this.activeWidgets.filter(function(w) { return w.type !== type; });
+            this.renderAll();
+            this.saveLayout();
+            this.updateLibrary();
+        }
+    },
+
+    updateAll: function(source, data) {
+        var changed = false;
+        for (var i = 0; i < this.activeWidgets.length; i++) {
+            var w = this.activeWidgets[i];
+            var spec = WidgetRegistry[w.type];
+            if (spec && spec.source === source) {
+                this._updateWidgetContent(w, data);
+                changed = true;
+            }
+        }
+    },
+
+    _updateWidgetContent: function(w, data) {
+        var valEl = document.getElementById('wv-' + w.id);
+        var unitEl = document.getElementById('wu-' + w.id);
+        if (!valEl) return;
+
+        switch (w.type) {
+            case 'cpu':
+                var cpu = data.cpu ? data.cpu.percent : null;
+                valEl.textContent = cpu !== null ? cpu.toFixed(1) : '—';
+                if (unitEl) unitEl.textContent = '%';
+
+                // Mini sparkline for S-size
+                if (w.size === 'S' && cpu !== null) {
+                    if (!this._cpuHistory[w.id]) this._cpuHistory[w.id] = [];
+                    var hist = this._cpuHistory[w.id];
+                    hist.push(cpu);
+                    if (hist.length > 60) hist.shift();
+
+                    var chart = this._ensureMiniChart(w, 'wchart-' + w.id, {
+                        type: 'line',
+                        data: {
+                            labels: hist.map(function() { return ''; }),
+                            datasets: [{
+                                data: hist.slice(),
+                                borderColor: chartColors.red,
+                                backgroundColor: 'transparent',
+                                borderWidth: 1.5,
+                                tension: 0.1,
+                                pointRadius: 0,
+                                fill: false,
+                            }]
+                        },
+                        options: {
+                            animation: false,
+                            responsive: true,
+                            maintainAspectRatio: false,
+                            plugins: {
+                                legend: { display: false },
+                                tooltip: { enabled: false },
+                            },
+                            scales: {
+                                x: { display: false },
+                                y: { display: false, min: 0, max: 100 },
+                            },
+                        },
+                    });
+                    if (chart) {
+                        chart.data.labels = hist.map(function() { return ''; });
+                        chart.data.datasets[0].data = hist.slice();
+                        chart.update('none');
+                    }
+                }
+                break;
+
+            case 'memory':
+                var mem = data.memory;
+                if (mem) {
+                    valEl.textContent = mem.percent.toFixed(1);
+                    if (unitEl) unitEl.textContent = '%';
+                }
+
+                // Mini doughnut for S-size
+                if (w.size === 'S' && mem) {
+                    var used = mem.used || 0;
+                    var avail = mem.available || 0;
+                    var chart = this._ensureMiniChart(w, 'wchart-' + w.id, {
+                        type: 'doughnut',
+                        data: {
+                            labels: ['已用', '可用'],
+                            datasets: [{
+                                data: [used, avail],
+                                backgroundColor: [chartColors.red, chartColors.grid],
+                                borderWidth: 0,
+                            }]
+                        },
+                        options: {
+                            animation: false,
+                            responsive: true,
+                            maintainAspectRatio: false,
+                            cutout: '70%',
+                            plugins: {
+                                legend: { display: false },
+                                tooltip: { enabled: false },
+                            },
+                        },
+                    });
+                    if (chart) {
+                        chart.data.datasets[0].data = [used, avail];
+                        chart.update('none');
+                    }
+                }
+                break;
+
+            case 'disk':
+                var disk0 = data.disk && data.disk[0];
+                if (disk0) {
+                    valEl.textContent = disk0.percent.toFixed(1);
+                    if (unitEl) unitEl.textContent = '% (' + (disk0.device || disk0.mountpoint || '') + ')';
+                }
+
+                // Mini horizontal bar for M-size
+                if (w.size === 'M' && data.disk && data.disk.length > 0) {
+                    var partitions = data.disk;
+                    var labels = partitions.map(function(d) { return (d.device || d.mountpoint || '?').substring(0, 12); });
+                    var values = partitions.map(function(d) { return d.percent || 0; });
+
+                    var chart = this._ensureMiniChart(w, 'wchart-' + w.id, {
+                        type: 'bar',
+                        data: {
+                            labels: labels,
+                            datasets: [{
+                                data: values,
+                                backgroundColor: chartColors.red,
+                                borderColor: '#FFFFFF',
+                                borderWidth: 1,
+                                borderRadius: 0,
+                                barThickness: 10,
+                            }]
+                        },
+                        options: {
+                            animation: false,
+                            responsive: true,
+                            maintainAspectRatio: false,
+                            indexAxis: 'y',
+                            plugins: {
+                                legend: { display: false },
+                                tooltip: { enabled: false },
+                            },
+                            scales: {
+                                x: { display: false, min: 0, max: 100 },
+                                y: {
+                                    display: true,
+                                    grid: { display: false },
+                                    ticks: {
+                                        font: { family: "'JetBrains Mono', monospace", size: 8 },
+                                        color: chartColors.grey,
+                                    },
+                                },
+                            },
+                        },
+                    });
+                    if (chart) {
+                        chart.data.labels = labels;
+                        chart.data.datasets[0].data = values;
+                        chart.update('none');
+                    }
+                }
+                break;
+
+            case 'network':
+                var ns = data.network_speed;
+                if (ns) {
+                    valEl.textContent = '↓' + formatSpeed(ns.recv_per_sec);
+                    if (unitEl) unitEl.textContent = '↑' + formatSpeed(ns.sent_per_sec);
+                }
+
+                // Dual-line sparkline for M-size
+                if (w.size === 'M' && ns) {
+                    if (!this._netRecvHistory[w.id]) this._netRecvHistory[w.id] = [];
+                    if (!this._netSentHistory[w.id]) this._netSentHistory[w.id] = [];
+                    this._netRecvHistory[w.id].push(ns.recv_per_sec);
+                    this._netSentHistory[w.id].push(ns.sent_per_sec);
+                    if (this._netRecvHistory[w.id].length > 30) this._netRecvHistory[w.id].shift();
+                    if (this._netSentHistory[w.id].length > 30) this._netSentHistory[w.id].shift();
+
+                    var recvHist = this._netRecvHistory[w.id];
+                    var sentHist = this._netSentHistory[w.id];
+
+                    var chart = this._ensureMiniChart(w, 'wchart-' + w.id, {
+                        type: 'line',
+                        data: {
+                            labels: recvHist.map(function() { return ''; }),
+                            datasets: [{
+                                label: '↓ 接收',
+                                data: recvHist.slice(),
+                                borderColor: chartColors.red,
+                                backgroundColor: 'transparent',
+                                borderWidth: 1.5,
+                                tension: 0.1,
+                                pointRadius: 0,
+                                fill: false,
+                            }, {
+                                label: '↑ 发送',
+                                data: sentHist.slice(),
+                                borderColor: chartColors.grey,
+                                backgroundColor: 'transparent',
+                                borderWidth: 1.5,
+                                tension: 0.1,
+                                pointRadius: 0,
+                                fill: false,
+                            }]
+                        },
+                        options: {
+                            animation: false,
+                            responsive: true,
+                            maintainAspectRatio: false,
+                            plugins: {
+                                legend: { display: false },
+                                tooltip: { enabled: false },
+                            },
+                            scales: {
+                                x: { display: false },
+                                y: { display: false },
+                            },
+                        },
+                    });
+                    if (chart) {
+                        chart.data.labels = recvHist.map(function() { return ''; });
+                        chart.data.datasets[0].data = recvHist.slice();
+                        chart.data.datasets[1].data = sentHist.slice();
+                        chart.update('none');
+                    }
+                }
+                break;
+
+            case 'gpu':
+                var temp = null;
+                var temps = data.temperature;
+                if (temps) {
+                    var tempKeys = Object.keys(temps);
+                    for (var t = 0; t < tempKeys.length; t++) {
+                        var entries = temps[tempKeys[t]];
+                        if (entries && entries.length > 0 && entries[0].current) {
+                            temp = entries[0].current;
+                            break;
+                        }
+                    }
+                }
+                var gpuName = (data.gpu && data.gpu[0]) ? data.gpu[0].name : null;
+                if (temp !== null) {
+                    valEl.textContent = temp.toFixed(0) + '°C';
+                    // Temperature-based color classes
+                    valEl.className = 'widget-value';
+                    if (temp > 80) {
+                        valEl.classList.add('text-hot');
+                        valEl.style.color = chartColors.red;
+                    } else if (temp > 60) {
+                        valEl.classList.add('text-warm');
+                        valEl.style.color = chartColors.yellow;
+                    } else {
+                        valEl.classList.add('text-cool');
+                        valEl.style.color = chartColors.green;
+                    }
+                } else {
+                    valEl.textContent = gpuName ? 'Active' : '—';
+                    valEl.className = 'widget-value';
+                    valEl.style.color = '';
+                }
+                if (unitEl) unitEl.textContent = gpuName ? gpuName.substring(0, 12) : '';
+                break;
+
+            case 'balance':
+                var bal = data.balance;
+                if (bal) {
+                    var balVal = bal.total_balance || bal.balance || 0;
+                    valEl.textContent = formatCurrency(Number(balVal));
+                    if (unitEl) unitEl.textContent = bal.currency || 'CNY';
+                } else if (data.needs_config) {
+                    valEl.textContent = '未配置';
+                    if (unitEl) unitEl.textContent = '';
+                }
+                break;
+
+            case 'tokens':
+                // Token data comes from CSV import — placeholder
+                if (data.total_tokens) {
+                    valEl.textContent = formatNumber(data.total_tokens);
+                }
+                if (unitEl) unitEl.textContent = 'tokens';
+                break;
+
+            case 'cache':
+                if (data.cached_tokens !== undefined) {
+                    var total = (data.total_tokens || data.input_tokens || 0) + (data.output_tokens || 0);
+                    var rate = total > 0 ? (data.cached_tokens / total * 100).toFixed(1) : 0;
+                    valEl.textContent = rate + '%';
+                    if (unitEl) unitEl.textContent = '缓存命中率';
+                }
+                break;
+
+            case 'uptime':
+                // Sync base from system data if available
+                if (data.uptime !== undefined && data.uptime !== null) {
+                    this._uptimeSecs[w.id] = data.uptime;
+                }
+                // Use own ticker value
+                var secs = this._uptimeSecs[w.id] || 0;
+                valEl.textContent = formatUptime(secs);
+                if (unitEl) unitEl.textContent = '';
+                break;
+        }
+    },
+
+    _initDragDrop: function(grid) {
+        var self = this;
+        grid.addEventListener('dragover', function(e) {
+            if (!self.isEditing) return;
+            e.preventDefault();
+            e.dataTransfer.dropEffect = 'move';
+        });
+
+        grid.addEventListener('drop', function(e) {
+            if (!self.isEditing) return;
+            e.preventDefault();
+            var fromId = e.dataTransfer.getData('text/plain');
+            if (!fromId) return;
+
+            var target = e.target;
+            // Walk up to find the widget element
+            while (target && target !== grid) {
+                if (target.classList.contains('widget')) break;
+                target = target.parentElement;
+            }
+            if (!target || target === grid) return;
+
+            var toId = target.getAttribute('data-id');
+            if (!toId || fromId === toId) return;
+
+            // Find indices and reorder
+            var fromIdx = -1, toIdx = -1;
+            for (var i = 0; i < self.activeWidgets.length; i++) {
+                if (self.activeWidgets[i].id === fromId) fromIdx = i;
+                if (self.activeWidgets[i].id === toId) toIdx = i;
+            }
+            if (fromIdx < 0 || toIdx < 0) return;
+
+            var item = self.activeWidgets.splice(fromIdx, 1)[0];
+            self.activeWidgets.splice(toIdx, 0, item);
+            self.renderAll();
+            self.saveLayout();
+        });
+    },
+
+    init: function() {
+        var self = this;
+        this.loadLayout();
+        this.renderAll();
+
+        // Toolbar buttons
+        var editBtn = document.getElementById('widgetEditBtn');
+        if (editBtn) {
+            editBtn.addEventListener('click', function() { self.enterEditMode(); });
+        }
+        var doneBtn = document.getElementById('widgetDoneBtn');
+        if (doneBtn) {
+            doneBtn.addEventListener('click', function() { self.exitEditMode(); });
+        }
+
+        // Uptime ticker — update all uptime widgets every second
+        setInterval(function() {
+            for (var i = 0; i < self.activeWidgets.length; i++) {
+                var w = self.activeWidgets[i];
+                if (w.type === 'uptime') {
+                    if (self._uptimeSecs[w.id] !== undefined) {
+                        self._uptimeSecs[w.id] = self._uptimeSecs[w.id] + 1;
+                        var valEl = document.getElementById('wv-' + w.id);
+                        if (valEl) {
+                            valEl.textContent = formatUptime(self._uptimeSecs[w.id]);
+                        }
+                    }
+                }
+            }
+        }, 1000);
+    }
 };
 
 // ── DOM Refs ─────────────────────────────────────────
@@ -133,9 +817,18 @@ function handleMessage(msg) {
     switch (msg.type) {
         case 'system':
             updateSystemData(msg.data);
+            WidgetEngine.updateAll('system', msg.data);
             break;
         case 'deepseek':
             updateDeepseekData(msg.data);
+            WidgetEngine.updateAll('deepseek', msg.data);
+            if (msg.data.needs_config === true) {
+                WidgetEngine.setVisibility('balance', false);
+                WidgetEngine.setVisibility('tokens', false);
+                WidgetEngine.setVisibility('cache', false);
+                WidgetEngine.renderAll();
+                WidgetEngine.saveLayout();
+            }
             break;
         case 'pong':
             break;
@@ -166,50 +859,51 @@ $$('.tab-btn').forEach(btn => {
 function updateSystemData(data) {
     if (!data) return;
 
-    // ─ Update Dashboard System Bar ─
     const cpu = data.cpu?.percent ?? 0;
     const mem = data.memory?.percent ?? 0;
     const disk = data.disk?.[0]?.percent ?? 0;
     const gpu = data.gpu?.[0] ? { name: data.gpu[0].name } : null;
-
-    $('#sysCpuFill').style.width = cpu + '%';
-    $('#sysCpuVal').textContent = cpu.toFixed(1) + '%';
-    $('#sysMemFill').style.width = mem + '%';
-    $('#sysMemVal').textContent = mem.toFixed(1) + '%';
-    $('#sysDiskFill').style.width = disk + '%';
-    $('#sysDiskVal').textContent = disk.toFixed(1) + '%';
-    $('#sysGpuFill').style.width = '0%';
-    $('#sysGpuVal').textContent = gpu ? 'Active' : '—';
-
-    // Temperature
     const temps = data.temperature;
-    let tempStr = '—';
-    if (temps) {
-        for (const key of Object.keys(temps)) {
-            const entries = temps[key];
-            if (entries && entries.length > 0) {
-                const current = entries[0]?.current;
-                if (current) {
-                    tempStr = current.toFixed(0) + '°C';
-                    break;
+    const netSpeed = data.network_speed;
+
+    // ─ Update Dashboard System Bar (if present — legacy fallback) ─
+    if ($('#sysCpuFill')) {
+        $('#sysCpuFill').style.width = cpu + '%';
+        $('#sysCpuVal').textContent = cpu.toFixed(1) + '%';
+        $('#sysMemFill').style.width = mem + '%';
+        $('#sysMemVal').textContent = mem.toFixed(1) + '%';
+        $('#sysDiskFill').style.width = disk + '%';
+        $('#sysDiskVal').textContent = disk.toFixed(1) + '%';
+        $('#sysGpuFill').style.width = '0%';
+        $('#sysGpuVal').textContent = gpu ? 'Active' : '—';
+
+        // Temperature
+        var tempStr = '—';
+        if (temps) {
+            for (var tk of Object.keys(temps)) {
+                var tentries = temps[tk];
+                if (tentries && tentries.length > 0) {
+                    var tcur = tentries[0].current;
+                    if (tcur) {
+                        tempStr = tcur.toFixed(0) + '°C';
+                        break;
+                    }
                 }
             }
         }
-    }
-    $('#sysTemp').textContent = tempStr;
+        $('#sysTemp').textContent = tempStr;
 
-    // Network
-    const netSpeed = data.network_speed;
-    if (netSpeed) {
-        const up = formatSpeed(netSpeed.sent_per_sec);
-        const down = formatSpeed(netSpeed.recv_per_sec);
-        $('#sysNet').textContent = '↓' + down + ' ↑' + up;
-    }
+        // Network
+        if (netSpeed) {
+            var up = formatSpeed(netSpeed.sent_per_sec);
+            var down = formatSpeed(netSpeed.recv_per_sec);
+            $('#sysNet').textContent = '↓' + down + ' ↑' + up;
+        }
 
-    // Last update
-    const ts = data.timestamp ? new Date(data.timestamp).toLocaleTimeString() : new Date().toLocaleTimeString();
-    $('#sysLastUpdate').textContent = ts;
-    $('#sysLastUpdate').closest('.sys-item').title = '最后更新: ' + ts;
+        // Last update
+        var ts = data.timestamp ? new Date(data.timestamp).toLocaleTimeString() : new Date().toLocaleTimeString();
+        $('#sysLastUpdate').textContent = ts;
+    }
 
     // ─ Update System Tab ─
     const host = data.host || {};
@@ -217,6 +911,131 @@ function updateSystemData(data) {
     $('#infoOS').textContent = (host.system || '') + ' ' + (host.release || '');
     $('#infoUptime').textContent = formatUptime(data.uptime);
     $('#infoProcesses').textContent = data.cpu?.count ? (data.cpu.count * 2 + '...') : '—';
+
+    // ─ Update Hardware Tab ─
+    // Status banner
+    const hwBannerText = $('#hwBannerText');
+    if (hwBannerText) {
+        if (cpu > 90 || mem > 90) {
+            hwBannerText.textContent = '⚠ 系统负载过高 — CPU ' + cpu.toFixed(0) + '% / 内存 ' + mem.toFixed(0) + '%';
+            const hwBanner = $('#hwBanner');
+            if (hwBanner) hwBanner.style.borderColor = 'var(--color-red)';
+        } else if (cpu > 70 || mem > 80) {
+            hwBannerText.textContent = '系统负载较高 — CPU ' + cpu.toFixed(0) + '% / 内存 ' + mem.toFixed(0) + '%';
+            const hwBanner = $('#hwBanner');
+            if (hwBanner) hwBanner.style.borderColor = 'var(--color-yellow)';
+        } else {
+            hwBannerText.textContent = '系统运行正常 — CPU ' + cpu.toFixed(0) + '% / 内存 ' + mem.toFixed(0) + '%';
+            const hwBanner = $('#hwBanner');
+            if (hwBanner) hwBanner.style.borderColor = 'var(--color-grey-30)';
+        }
+    }
+
+    // CPU Stats
+    const cpuStats = $('#hwCpuStats');
+    if (cpuStats && data.cpu) {
+        const freq = data.cpu.freq?.current ? (data.cpu.freq.current / 1000).toFixed(1) + ' GHz' : '—';
+        cpuStats.innerHTML = '<span>CPU: <strong>' + cpu.toFixed(1) + '%</strong></span>' +
+            '<span>核心: <strong>' + (data.cpu.count || '—') + '</strong></span>' +
+            '<span>频率: <strong>' + freq + '</strong></span>';
+        state.lastCpuPerCore = data.cpu.per_cpu || null;
+    }
+
+    // Memory Stats
+    const memStats = $('#hwMemStats');
+    if (memStats && data.memory) {
+        memStats.innerHTML = '<span>已用: <strong>' + formatBytes(data.memory.used) + '</strong></span>' +
+            '<span>可用: <strong>' + formatBytes(data.memory.available) + '</strong></span>' +
+            '<span>总量: <strong>' + formatBytes(data.memory.total) + '</strong></span>';
+        state.lastMemData = data.memory;
+    }
+
+    // Disk Stats
+    const diskStats = $('#hwDiskStats');
+    if (diskStats && data.disk) {
+        const disk0 = data.disk[0];
+        if (disk0) {
+            diskStats.innerHTML = '<span>' + (disk0.device || disk0.mountpoint) + ': <strong>' + disk0.percent.toFixed(1) + '%</strong></span>' +
+                '<span>已用: <strong>' + formatBytes(disk0.used) + '</strong></span>' +
+                '<span>总量: <strong>' + formatBytes(disk0.total) + '</strong></span>';
+        }
+        state.lastDiskData = data.disk;
+    }
+
+    // GPU Stats
+    const gpuStats = $('#hwGpuStats');
+    if (gpuStats) {
+        const gpuData = data.gpu?.[0];
+        if (gpuData) {
+            let tempStr = '—';
+            if (temps) {
+                for (const key of Object.keys(temps)) {
+                    const entries = temps[key];
+                    if (entries && entries.length > 0) {
+                        const current = entries[0]?.current;
+                        if (current) {
+                            tempStr = current.toFixed(0) + '°C';
+                            break;
+                        }
+                    }
+                }
+            }
+            const gpuName = gpuData.name ? gpuData.name.substring(0, 24) : 'Unknown';
+            gpuStats.innerHTML = '<span>GPU: <strong>' + gpuName + '</strong></span>' +
+                '<span>温度: <strong>' + tempStr + '</strong></span>';
+            state.lastGpuTemp = (function() {
+                if (temps) {
+                    for (const key of Object.keys(temps)) {
+                        const entries = temps[key];
+                        if (entries && entries.length > 0 && entries[0]?.current) {
+                            return entries[0].current;
+                        }
+                    }
+                }
+                return null;
+            })();
+        } else {
+            gpuStats.innerHTML = '<span>GPU: <strong>未检测到</strong></span>';
+            state.lastGpuTemp = null;
+        }
+    }
+
+    // Network Stats
+    const netStats = $('#hwNetStats');
+    if (netStats && netSpeed) {
+        const down = formatSpeed(netSpeed.recv_per_sec);
+        const up = formatSpeed(netSpeed.sent_per_sec);
+        netStats.innerHTML = '<span>↓ 接收: <strong>' + down + '</strong></span>' +
+            '<span>↑ 发送: <strong>' + up + '</strong></span>';
+
+        // Store net history for chart
+        const now = new Date().toLocaleTimeString();
+        state.netHistory.timestamps.push(now);
+        state.netHistory.recv.push(netSpeed.recv_per_sec);
+        state.netHistory.sent.push(netSpeed.sent_per_sec);
+        if (state.netHistory.timestamps.length > state.maxHistoryPoints) {
+            state.netHistory.timestamps.shift();
+            state.netHistory.recv.shift();
+            state.netHistory.sent.shift();
+        }
+    }
+
+    // Battery Stats
+    const batteryCard = $('#hwBatteryCard');
+    const batteryStats = $('#hwBatteryStats');
+    if (data.battery) {
+        if (batteryCard) batteryCard.classList.remove('hidden');
+        if (batteryStats) {
+            const pct = data.battery.percent;
+            const status = data.battery.power_plugged ? '充电中' : '放电中';
+            batteryStats.innerHTML = '<span>电量: <strong>' + pct.toFixed(0) + '%</strong></span>' +
+                '<span>状态: <strong>' + status + '</strong></span>';
+        }
+        state.lastBatteryData = data.battery;
+    } else {
+        if (batteryCard) batteryCard.classList.add('hidden');
+        state.lastBatteryData = null;
+    }
 
     // ─ Store history for real-time charts ─
     const now = new Date().toLocaleTimeString();
@@ -237,26 +1056,25 @@ function updateSystemData(data) {
 function updateDeepseekData(data) {
     if (!data) return;
     if (data.needs_config) {
-        $('#todayTokens').textContent = '未配置';
-        $('#accountBalance').textContent = '—';
-        $('#todayCost').textContent = '—';
+        var tte = $('#todayTokens'); if (tte) tte.textContent = '未配置';
+        var abe = $('#accountBalance'); if (abe) abe.textContent = '—';
+        var tce = $('#todayCost'); if (tce) tce.textContent = '—';
         return;
     }
     // Balance
-    const balance = data.balance;
+    var balance = data.balance;
     if (balance) {
-        const bal = Number(balance.balance) || 0;
-        const granted = Number(balance.granted_balance) || 0;
-        const toppedUp = Number(balance.topped_up_balance) || 0;
-        const currency = balance.currency || 'CNY';
-        const sym = currency === 'CNY' ? '¥' : '$';
-        $('#accountBalance').textContent = sym + bal.toFixed(2);
-        // Show breakdown in kpi-meta
-        const balanceEl = $('#accountBalance');
-        if (balanceEl) {
-            const heroKpi = balanceEl.closest('.hero-kpi');
+        var bal = Number(balance.total_balance || balance.balance) || 0;
+        var granted = Number(balance.granted_balance) || 0;
+        var toppedUp = Number(balance.topped_up_balance) || 0;
+        var currency = balance.currency || 'CNY';
+        var sym = currency === 'CNY' ? '¥' : '$';
+        var abEl = $('#accountBalance');
+        if (abEl) {
+            abEl.textContent = sym + bal.toFixed(2);
+            var heroKpi = abEl.closest('.hero-kpi');
             if (heroKpi) {
-                const metaEl = heroKpi.querySelector('.kpi-meta');
+                var metaEl = heroKpi.querySelector('.kpi-meta');
                 if (metaEl) {
                     metaEl.innerHTML = '<span>赠金: <strong>' + sym + granted.toFixed(2) + '</strong></span>' +
                         '<span>充值: <strong>' + sym + toppedUp.toFixed(2) + '</strong></span>';
@@ -265,16 +1083,16 @@ function updateDeepseekData(data) {
         }
     }
     // Keep token/cost cards showing placeholder (no auto-collected data anymore)
-    $('#todayTokens').textContent = '—';
-    $('#todayInput').textContent = '—';
-    $('#todayOutput').textContent = '—';
-    $('#todayCached').textContent = '—';
-    $('#todayCost').textContent = '—';
-    $('#monthCost').textContent = '—';
-    $('#weekCost').textContent = '—';
-    $('#cacheRate').textContent = '—';
-    $('#activeModels').textContent = '—';
-    $('#modelList').textContent = '导入CSV后显示';
+    var tte2 = $('#todayTokens'); if (tte2) tte2.textContent = '—';
+    var tie = $('#todayInput'); if (tie) tie.textContent = '—';
+    var toe = $('#todayOutput'); if (toe) toe.textContent = '—';
+    var tce2 = $('#todayCached'); if (tce2) tce2.textContent = '—';
+    var tce3 = $('#todayCost'); if (tce3) tce3.textContent = '—';
+    var mce = $('#monthCost'); if (mce) mce.textContent = '—';
+    var wce = $('#weekCost'); if (wce) wce.textContent = '—';
+    var cre = $('#cacheRate'); if (cre) cre.textContent = '—';
+    var ame = $('#activeModels'); if (ame) ame.textContent = '—';
+    var mle = $('#modelList'); if (mle) mle.textContent = '导入CSV后显示';
 }
 
 // ── Chart Initialization ────────────────────────────
@@ -504,78 +1322,59 @@ function initCostTrendChart() {
     return state.charts.costTrend;
 }
 
-// ── System Tab Charts ───────────────────────────────
+// ── Hardware Tab Charts ──────────────────────────────
 
-function initRealtimeCharts() {
-    // CPU/Mem real-time chart
-    const ctx = document.getElementById('sysCpuChart');
+function initHwCpuCoresChart() {
+    const ctx = document.getElementById('hwCpuCoresChart');
     if (!ctx) return;
 
-    state.charts.sysCpu = new Chart(ctx, {
-        type: 'line',
+    state.charts.hwCpuCores = new Chart(ctx, {
+        type: 'bar',
         data: {
             labels: [],
             datasets: [{
                 label: 'CPU %',
                 data: [],
-                borderColor: chartColors.red,
-                backgroundColor: 'transparent',
-                borderWidth: 3,
-                tension: 0,
-                pointRadius: 0,
-                fill: false,
-            }, {
-                label: '内存 %',
-                data: [],
+                backgroundColor: chartColors.red,
                 borderColor: chartColors.white,
-                backgroundColor: 'transparent',
-                borderWidth: 2,
-                tension: 0,
-                pointRadius: 0,
-                borderDash: [3, 3],
-                fill: false,
+                borderWidth: 1,
+                borderRadius: 0,
+                barThickness: 16,
             }],
         },
         options: {
             ...chartDefaults,
-            scales: {
-                ...chartDefaults.scales,
-                y: { ...chartDefaults.scales.y, min: 0, max: 100 },
-            },
+            indexAxis: 'y',
             plugins: {
                 ...chartDefaults.plugins,
-                legend: {
-                    display: true,
-                    position: 'top',
-                    labels: {
-                        color: chartColors.grey,
-                        font: { family: "'JetBrains Mono', monospace", size: 10 },
-                        padding: 16,
-                        usePointStyle: true,
-                    },
-                },
+                legend: { display: false },
+            },
+            scales: {
+                x: { ...chartDefaults.scales.x, min: 0, max: 100 },
+                y: chartDefaults.scales.y,
             },
         },
     });
 }
 
-function initSysGpuChart() {
-    const ctx = document.getElementById('sysGpuChart');
+function initHwMemChart() {
+    const ctx = document.getElementById('hwMemChart');
     if (!ctx) return;
 
-    state.charts.sysGpu = new Chart(ctx, {
+    state.charts.hwMem = new Chart(ctx, {
         type: 'doughnut',
         data: {
-            labels: ['使用中', '空闲'],
+            labels: ['已用', '可用'],
             datasets: [{
                 data: [0, 100],
                 backgroundColor: [chartColors.red, chartColors.grid],
                 borderWidth: 0,
+                borderRadius: 0,
             }],
         },
         options: {
             ...chartDefaults,
-            cutout: '75%',
+            cutout: '65%',
             plugins: {
                 ...chartDefaults.plugins,
                 legend: {
@@ -593,11 +1392,11 @@ function initSysGpuChart() {
     });
 }
 
-function initSysDiskChart() {
-    const ctx = document.getElementById('sysDiskChart');
+function initHwDiskChart() {
+    const ctx = document.getElementById('hwDiskChart');
     if (!ctx) return;
 
-    state.charts.sysDisk = new Chart(ctx, {
+    state.charts.hwDisk = new Chart(ctx, {
         type: 'bar',
         data: {
             labels: [],
@@ -608,6 +1407,7 @@ function initSysDiskChart() {
                 borderColor: chartColors.white,
                 borderWidth: 1,
                 borderRadius: 0,
+                barThickness: 20,
             }],
         },
         options: {
@@ -620,6 +1420,125 @@ function initSysDiskChart() {
             scales: {
                 x: { ...chartDefaults.scales.x, min: 0, max: 100 },
                 y: chartDefaults.scales.y,
+            },
+        },
+    });
+}
+
+function initHwGpuTempChart() {
+    const ctx = document.getElementById('hwGpuTempChart');
+    if (!ctx) return;
+
+    state.charts.hwGpuTemp = new Chart(ctx, {
+        type: 'doughnut',
+        data: {
+            labels: ['温度', '余量'],
+            datasets: [{
+                data: [0, 100],
+                backgroundColor: [chartColors.red, chartColors.grid],
+                borderWidth: 0,
+                borderRadius: 0,
+            }],
+        },
+        options: {
+            ...chartDefaults,
+            cutout: '70%',
+            plugins: {
+                ...chartDefaults.plugins,
+                legend: {
+                    display: true,
+                    position: 'bottom',
+                    labels: {
+                        color: chartColors.grey,
+                        font: { family: "'JetBrains Mono', monospace", size: 9 },
+                        padding: 8,
+                        usePointStyle: true,
+                    },
+                },
+            },
+        },
+    });
+}
+
+function initHwNetChart() {
+    const ctx = document.getElementById('hwNetChart');
+    if (!ctx) return;
+
+    state.charts.hwNet = new Chart(ctx, {
+        type: 'line',
+        data: {
+            labels: [],
+            datasets: [{
+                label: '↓ 接收',
+                data: [],
+                borderColor: chartColors.red,
+                backgroundColor: 'transparent',
+                borderWidth: 2,
+                tension: 0,
+                pointRadius: 0,
+                fill: false,
+            }, {
+                label: '↑ 发送',
+                data: [],
+                borderColor: chartColors.white,
+                backgroundColor: 'transparent',
+                borderWidth: 2,
+                tension: 0,
+                pointRadius: 0,
+                borderDash: [3, 3],
+                fill: false,
+            }],
+        },
+        options: {
+            ...chartDefaults,
+            scales: {
+                ...chartDefaults.scales,
+                y: {
+                    ...chartDefaults.scales.y,
+                    ticks: {
+                        ...chartDefaults.scales.y.ticks,
+                        callback: (val) => formatBytes(val),
+                    },
+                },
+            },
+            plugins: {
+                ...chartDefaults.plugins,
+                legend: {
+                    display: true,
+                    position: 'top',
+                    labels: {
+                        color: chartColors.grey,
+                        font: { family: "'JetBrains Mono', monospace", size: 9 },
+                        padding: 12,
+                        usePointStyle: true,
+                    },
+                },
+            },
+        },
+    });
+}
+
+function initHwBatteryChart() {
+    const ctx = document.getElementById('hwBatteryChart');
+    if (!ctx) return;
+
+    state.charts.hwBattery = new Chart(ctx, {
+        type: 'doughnut',
+        data: {
+            labels: ['电量', ''],
+            datasets: [{
+                data: [0, 100],
+                backgroundColor: [chartColors.green, chartColors.grid],
+                borderWidth: 0,
+                borderRadius: 0,
+            }],
+        },
+        options: {
+            ...chartDefaults,
+            cutout: '65%',
+            plugins: {
+                ...chartDefaults.plugins,
+                legend: { display: false },
             },
         },
     });
@@ -766,21 +1685,63 @@ function updateDeepseekWithModelData(data) {
 }
 
 function updateRealtimeCharts() {
-    // CPU/Mem real-time
-    const chart = state.charts.sysCpu;
-    if (chart) {
-        chart.data.labels = state.systemHistory.timestamps;
-        chart.data.datasets[0].data = state.systemHistory.cpu;
-        chart.data.datasets[1].data = state.systemHistory.mem;
-        chart.update('none');
+    // CPU Cores chart
+    const cpuChart = state.charts.hwCpuCores;
+    if (cpuChart && state.lastCpuPerCore) {
+        cpuChart.data.labels = state.lastCpuPerCore.map(function(_, i) { return '核心 ' + i; });
+        cpuChart.data.datasets[0].data = state.lastCpuPerCore;
+        cpuChart.update('none');
     }
 
-    // Disk
-    const diskChart = state.charts.sysDisk;
+    // Memory chart
+    const memChart = state.charts.hwMem;
+    if (memChart && state.lastMemData) {
+        memChart.data.datasets[0].data = [state.lastMemData.used, state.lastMemData.available];
+        memChart.update('none');
+    }
+
+    // Disk chart
+    const diskChart = state.charts.hwDisk;
     if (diskChart && state.lastDiskData) {
-        diskChart.data.labels = state.lastDiskData.map(d => d.device || d.mountpoint);
-        diskChart.data.datasets[0].data = state.lastDiskData.map(d => d.percent || 0);
+        diskChart.data.labels = state.lastDiskData.map(function(d) { return (d.device || d.mountpoint).substring(0, 20); });
+        diskChart.data.datasets[0].data = state.lastDiskData.map(function(d) { return d.percent || 0; });
         diskChart.update('none');
+    }
+
+    // GPU Temp chart
+    const gpuChart = state.charts.hwGpuTemp;
+    if (gpuChart) {
+        const temp = state.lastGpuTemp;
+        if (temp !== null && temp !== undefined) {
+            const cappedTemp = Math.min(temp, 100);
+            gpuChart.data.datasets[0].data = [cappedTemp, 100 - cappedTemp];
+            gpuChart.data.datasets[0].backgroundColor = [temp > 80 ? chartColors.red : chartColors.green, chartColors.grid];
+        } else {
+            gpuChart.data.datasets[0].data = [0, 100];
+            gpuChart.data.datasets[0].backgroundColor = [chartColors.grid, chartColors.grid];
+        }
+        gpuChart.update('none');
+    }
+
+    // Network chart
+    const netChart = state.charts.hwNet;
+    if (netChart && state.netHistory.timestamps.length > 0) {
+        netChart.data.labels = state.netHistory.timestamps;
+        netChart.data.datasets[0].data = state.netHistory.recv;
+        netChart.data.datasets[1].data = state.netHistory.sent;
+        netChart.update('none');
+    }
+
+    // Battery chart
+    const batChart = state.charts.hwBattery;
+    if (batChart && state.lastBatteryData) {
+        const pct = state.lastBatteryData.percent;
+        batChart.data.datasets[0].data = [pct, 100 - pct];
+        batChart.data.datasets[0].backgroundColor = [
+            pct > 50 ? chartColors.green : (pct > 20 ? chartColors.yellow : chartColors.red),
+            chartColors.grid
+        ];
+        batChart.update('none');
     }
 }
 
@@ -871,6 +1832,22 @@ $('#csvImportBtn')?.addEventListener('click', async () => {
 
 // ── Settings ─────────────────────────────────────────
 
+// Auto-hide AI widgets when no API key configured
+async function checkAiWidgets() {
+    try {
+        var resp = await fetch('/api/config');
+        var cfg = await resp.json();
+        var configured = !!cfg.configured;
+        WidgetEngine.setVisibility('balance', configured);
+        WidgetEngine.setVisibility('tokens', configured);
+        WidgetEngine.setVisibility('cache', configured);
+        WidgetEngine.renderAll();
+        WidgetEngine.saveLayout();
+    } catch (e) {
+        /* silently ignore */
+    }
+}
+
 // Load config
 async function loadConfig() {
     try {
@@ -955,14 +1932,17 @@ function init() {
     // Load config
     loadConfig();
 
-    // Initialize charts
-    initTokenTrendChart();
-    initModelBreakdownChart();
-    initCacheRateChart();
-    initCostTrendChart();
-    initRealtimeCharts();
-    initSysGpuChart();
-    initSysDiskChart();
+    // Initialize Widget Engine (replaces old dashboard charts)
+    WidgetEngine.init();
+    setTimeout(function() { checkAiWidgets(); }, 500);
+
+    // Initialize hardware tab charts
+    initHwCpuCoresChart();
+    initHwMemChart();
+    initHwDiskChart();
+    initHwGpuTempChart();
+    initHwNetChart();
+    initHwBatteryChart();
     initHistoryTrendChart();
 
     // Connect WebSocket
