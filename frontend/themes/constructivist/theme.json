@@ -1,0 +1,36 @@
+{
+  "name": "苏维埃构成主义",
+  "version": "1.0.0",
+  "author": "Pulse Team",
+  "description": "1920s 工业美学 · 红/黑/白三色系统",
+  "type": "official",
+  "tokens": {
+    "colorPrimary": "#CC0000",
+    "colorBackground": "#000000",
+    "colorSurface": "#1A1A1A",
+    "colorText": "#FFFFFF",
+    "colorTextSecondary": "#808080",
+    "colorAccent": "#FFD700",
+    "colorSuccess": "#2D8A2D",
+    "colorDanger": "#CC0000",
+    "colorChart1": "#CC0000",
+    "colorChart2": "#000000",
+    "colorChart3": "#4D4D4D",
+    "fontDisplay": "'Tektur', 'Impact', sans-serif",
+    "fontBody": "'Montserrat', 'Inter', sans-serif",
+    "fontMono": "'JetBrains Mono', monospace",
+    "fontSizeBase": "14px",
+    "fontSizeKPI": "56px",
+    "fontSizeHeadline": "24px",
+    "borderRadius": "0px",
+    "borderWidth": "1px",
+    "shadowOffset": "4px 4px",
+    "shadowColor": "rgba(0,0,0,0.3)",
+    "touchTarget": "44px"
+  },
+  "marketplace": {
+    "price": 0,
+    "tags": ["dark", "industrial", "constructivist"],
+    "sponsor_url": ""
+  }
+}

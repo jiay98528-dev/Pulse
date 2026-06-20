@@ -369,6 +369,46 @@
                 </div>
             </div>
 
+            <!-- 外观 -->
+            <div class="settings-card" id="settings-appearance">
+                <div class="card-header">外观</div>
+                <div class="form-group">
+                    <label>当前主题</label>
+                    <select id="theme-select" class="form-input">
+                        <option value="constructivist">苏维埃构成主义</option>
+                    </select>
+                </div>
+                <div class="theme-preview" id="theme-preview">
+                    <div class="theme-preview-swatch" style="background:#CC0000"></div>
+                    <div class="theme-preview-swatch" style="background:#000000"></div>
+                    <div class="theme-preview-swatch" style="background:#FFFFFF"></div>
+                    <div class="theme-preview-swatch" style="background:#808080"></div>
+                </div>
+                <div class="form-actions">
+                    <button class="btn-secondary" id="theme-editor-btn">主题编辑器 [Beta]</button>
+                </div>
+            </div>
+
+            <!-- 主题市场 -->
+            <div class="settings-card" id="settings-marketplace">
+                <div class="card-header">主题市场</div>
+                <div class="marketplace-grid" id="marketplace-grid">
+                    <div class="marketplace-item" data-theme="constructivist">
+                        <div class="marketplace-preview" style="background:#000000;border:2px solid #CC0000;">
+                            <span style="color:#CC0000;font-weight:bold;font-size:24px;">★</span>
+                        </div>
+                        <div class="marketplace-info">
+                            <div class="marketplace-name">苏维埃构成主义</div>
+                            <div class="marketplace-author">Pulse Team · 官方</div>
+                            <div class="marketplace-badge free">免费</div>
+                        </div>
+                    </div>
+                </div>
+                <div class="form-actions">
+                    <span class="hint">拖入 .pulse-theme 文件安装社区主题</span>
+                </div>
+            </div>
+
             <!-- 系统 (默认隐藏, M5完成后启用) -->
             <div class="settings-card hidden" id="settings-system">
                 <div class="card-header red">系统 [LAN]</div>

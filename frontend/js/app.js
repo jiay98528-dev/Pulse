@@ -2427,6 +2427,9 @@ function init() {
     // Load config
     loadConfig();
 
+    // Initialize Theme Engine (load saved theme or use default)
+    ThemeEngine.init();
+
     // Initialize Widget Engine (replaces old dashboard charts)
     WidgetEngine.init();
     setTimeout(function() { checkAiWidgets(); }, 500);
@@ -2437,6 +2440,10 @@ function init() {
     // Initialize vendor selector
     initVendorSelector();
     updateSystemCardVisibility();
+
+    // Initialize theme UI
+    initThemeSelector();
+    initMarketplace();
 
     // Initialize hardware tab charts
     initHwCpuCoresChart();
@@ -2665,6 +2672,129 @@ function initPhase45() {
     document.body.appendChild(tc);
   }
 }
+
+// ── Theme Engine ──────────────────────────────────────
+function camelToKebab(str) {
+    return str.replace(/([A-Z])/g, '-$1').toLowerCase();
+}
+
+// ── Theme UI ────────────────────────────────────
+function initThemeSelector() {
+    var sel = $('#theme-select');
+    if (!sel) return;
+    // Remove existing listeners by cloning
+    // Using change event
+    sel.onchange = function() {
+        ThemeEngine.activate(this.value);
+    };
+    // Sync with current active theme
+    if (ThemeEngine.activeTheme) {
+        sel.value = ThemeEngine.activeTheme;
+    }
+}
+
+function initMarketplace() {
+    var grid = $('#marketplace-grid');
+    if (!grid) return;
+    grid.addEventListener('click', function(e) {
+        var item = e.target.closest('.marketplace-item');
+        if (item) {
+            var themeName = item.getAttribute('data-theme');
+            if (themeName) {
+                ThemeEngine.activate(themeName);
+                // Update dropdown to match
+                var sel = $('#theme-select');
+                if (sel) sel.value = themeName;
+            }
+        }
+    });
+}
+
+const ThemeEngine = {
+    activeTheme: null,
+    themes: {},
+    builtinThemePath: 'themes/constructivist/theme.json',
+
+    async loadThemeData(path) {
+        if (this.themes[path]) return this.themes[path];
+        try {
+            var resp = await fetch(path);
+            if (!resp.ok) throw new Error('HTTP ' + resp.status);
+            var data = await resp.json();
+            this.themes[path] = data;
+            return data;
+        } catch (e) {
+            console.warn('[Theme] Failed to load:', path, e);
+            return null;
+        }
+    },
+
+    async activate(name) {
+        // Check cache by name
+        var theme = this.themes[name];
+        if (!theme) {
+            var path = name === 'constructivist'
+                ? this.builtinThemePath
+                : 'themes/' + name + '/theme.json';
+            theme = await this.loadThemeData(path);
+            if (!theme) {
+                console.warn('[Theme] Theme not found:', name);
+                return;
+            }
+            this.themes[name] = theme;
+        }
+
+        // Apply tokens as CSS variables on :root
+        var tokens = theme.tokens || {};
+        var root = document.documentElement;
+        for (var key in tokens) {
+            if (Object.prototype.hasOwnProperty.call(tokens, key)) {
+                var cssVar = '--' + camelToKebab(key);
+                root.style.setProperty(cssVar, tokens[key]);
+            }
+        }
+
+        // Update Chart.js global defaults
+        if (tokens.colorTextSecondary) {
+            Chart.defaults.color = tokens.colorTextSecondary;
+        }
+        if (tokens.fontMono) {
+            Chart.defaults.font.family = tokens.fontMono;
+        }
+
+        // Redraw all Chart.js instances (non-animated)
+        for (var chartKey in state.charts) {
+            if (state.charts[chartKey] && typeof state.charts[chartKey].update === 'function') {
+                state.charts[chartKey].update('none');
+            }
+        }
+
+        // Redraw widget mini charts
+        for (var wid in WidgetEngine._widgetCharts) {
+            if (WidgetEngine._widgetCharts[wid] && typeof WidgetEngine._widgetCharts[wid].update === 'function') {
+                WidgetEngine._widgetCharts[wid].update('none');
+            }
+        }
+
+        // Persist preference
+        localStorage.setItem('pulse-active-theme', name);
+        this.activeTheme = name;
+
+        // Update theme indicator if present
+        var indicator = document.getElementById('themeIndicator');
+        if (indicator) {
+            indicator.textContent = theme.name || name;
+        }
+
+        console.log('[Theme] Activated:', name);
+    },
+
+    async init() {
+        var saved = localStorage.getItem('pulse-active-theme');
+        var name = saved || 'constructivist';
+        await this.activate(name);
+    }
+};
 
 // Start when DOM is ready
 if (document.readyState === 'loading') {
