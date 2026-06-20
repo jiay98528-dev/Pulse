@@ -1659,3 +1659,65 @@ body.has-titlebar #connection-banner {
     text-transform: uppercase;
     color: var(--color-grey-70);
 }
+
+/* ══════════════════════════════════════════════════
+   Plugin Manager
+   ══════════════════════════════════════════════════ */
+.plugin-list { display: flex; flex-direction: column; gap: var(--space-2); }
+.plugin-card { display: flex; align-items: center; gap: var(--space-3); padding: var(--space-3); background: var(--color-black); border: 1px solid var(--color-grey-30); }
+.plugin-card:hover { border-color: var(--color-red); }
+.plugin-icon { font-size: 28px; width: 44px; text-align: center; }
+.plugin-info { flex: 1; }
+.plugin-name { font-family: var(--font-heading); font-size: var(--text-base); text-transform: uppercase; color: var(--color-white); }
+.plugin-desc { font-size: var(--text-sm); color: var(--color-grey-50); margin-top: var(--space-1); }
+.plugin-meta { font-size: var(--text-xs); color: var(--color-grey-50); margin-top: var(--space-1); }
+.plugin-status { display: inline-block; font-size: 12px; padding: 2px 8px; }
+.plugin-status.enabled { background: var(--color-green); color: var(--color-white); }
+.plugin-status.disabled { background: var(--color-grey-30); color: var(--color-grey-50); }
+.plugin-actions { display: flex; gap: var(--space-2); align-items: center; }
+
+/* ══════════════════════════════════════════════════
+   LAN Management (Plugin Tab)
+   ══════════════════════════════════════════════════ */
+.lan-management-card { margin-top: var(--space-3); }
+.lan-toolbar { display: flex; gap: var(--space-2); align-items: center; margin-bottom: var(--space-3); flex-wrap: wrap; }
+.lan-status { font-family: var(--font-mono); font-size: var(--text-xs); color: var(--color-grey-50); margin-left: auto; }
+.lan-discovery-results { margin-bottom: var(--space-3); padding: var(--space-3); background: var(--color-black); border: 1px solid var(--color-grey-30); }
+.lan-discovery-results.hidden { display: none; }
+.lan-device-section { margin-top: var(--space-2); }
+.lan-device-list { display: flex; flex-direction: column; gap: var(--space-2); }
+.lan-device-item { display: flex; align-items: center; gap: var(--space-3); padding: var(--space-2) var(--space-3); background: var(--color-black); border: 1px solid var(--color-grey-30); }
+.lan-device-item:hover { border-color: var(--color-red); }
+.lan-device-item .device-icon { font-size: 20px; width: 32px; text-align: center; }
+.lan-device-item .device-info { flex: 1; }
+.lan-device-item .device-name { font-family: var(--font-heading); font-size: var(--text-sm); text-transform: uppercase; color: var(--color-white); }
+.lan-device-item .device-ip { font-family: var(--font-mono); font-size: var(--text-xs); color: var(--color-grey-50); }
+.lan-device-item .device-actions { display: flex; gap: var(--space-1); }
+.lan-device-item .device-actions button { font-size: var(--text-xs); padding: 4px 10px; min-height: 32px; }
+.lan-device-item .device-trust { font-size: 10px; color: var(--color-green); border: 1px solid var(--color-green); padding: 2px 6px; }
+
+/* ══════════════════════════════════════════════════
+   Pairing Overlay
+   ══════════════════════════════════════════════════ */
+.pairing-dialog { text-align: center; }
+.pairing-text { font-size: var(--text-base); color: var(--color-grey-70); margin-bottom: var(--space-5); }
+.pairing-text strong { color: var(--color-white); }
+.pairing-actions { display: flex; gap: var(--space-3); justify-content: center; margin-bottom: var(--space-4); }
+.pairing-actions .btn-primary { min-width: 120px; }
+.pairing-actions .btn-secondary { min-width: 120px; }
+.pairing-trust { display: flex; align-items: center; justify-content: center; gap: var(--space-2); margin-bottom: var(--space-3); }
+.pairing-trust-label { font-size: var(--text-sm); color: var(--color-grey-50); text-transform: uppercase; letter-spacing: 0.05em; }
+.pairing-pin-row { margin-top: var(--space-3); }
+.pairing-pin-row label { display: block; font-size: var(--text-xs); color: var(--color-grey-50); margin-bottom: var(--space-2); }
+.pairing-pin-row input { width: 200px; margin: 0 auto; text-align: center; }
+
+/* ══════════════════════════════════════════════════
+   Metric Selector Overlay
+   ══════════════════════════════════════════════════ */
+.metric-dialog { text-align: center; }
+.metric-device-name { font-size: var(--text-sm); color: var(--color-grey-50); margin-bottom: var(--space-4); }
+.metric-list { display: flex; flex-direction: column; gap: var(--space-2); margin-bottom: var(--space-4); text-align: left; }
+.metric-item { display: flex; align-items: center; gap: var(--space-3); padding: var(--space-2) var(--space-3); background: var(--color-black); border: 1px solid var(--color-grey-30); cursor: pointer; transition: border-color var(--duration-fast); min-height: 44px; }
+.metric-item:hover { border-color: var(--color-red); }
+.metric-item input[type="checkbox"] { width: 18px; height: 18px; accent-color: var(--color-red); }
+.metric-label { font-family: var(--font-heading); font-size: var(--text-sm); text-transform: uppercase; letter-spacing: 0.05em; color: var(--color-white); }
