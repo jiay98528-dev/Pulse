@@ -1379,7 +1379,7 @@ body {
    Body adjustment for title bar offset
    ══════════════════════════════════════════════════ */
 body.has-titlebar .header {
-    top: 36px;
+    margin-top: 36px;
 }
 body.has-titlebar main,
 body.has-titlebar .tab-content {
