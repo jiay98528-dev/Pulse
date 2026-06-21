@@ -7,10 +7,11 @@ from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
+from urllib.parse import unquote
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, UploadFile, File, HTTPException
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, UploadFile, File, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 import pandas as pd
 
 from config import load_config, save_config, is_configured
@@ -29,6 +30,9 @@ from plugins.manager import PluginManager
 async def lifespan(app: FastAPI):
     """Startup: init DB + init plugins + background tasks. Shutdown: cleanup."""
     await init_db()
+
+    global startup_time
+    startup_time = datetime.now(timezone.utc)
 
     # Discover and init plugins
     global plugin_manager
@@ -65,13 +69,31 @@ async def lifespan(app: FastAPI):
 
 # ── App Init ────────────────────────────────────────────
 app = FastAPI(title="Pulse Dashboard", version="1.0.0", lifespan=lifespan)
+
+ALLOWED_ORIGINS = [
+    "http://127.0.0.1:8080",
+    "http://localhost:8080",
+    "http://tauri.localhost",
+    "https://tauri.localhost",
+    "tauri://localhost",
+]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
+    allow_origins=ALLOWED_ORIGINS,
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.middleware("http")
+async def reject_untrusted_write_origins(request: Request, call_next):
+    """Reject browser writes from non-local origins before they reach API handlers."""
+    if request.url.path.startswith("/api/") and request.method not in {"GET", "HEAD", "OPTIONS"}:
+        origin = request.headers.get("origin")
+        if origin and origin not in ALLOWED_ORIGINS:
+            return JSONResponse({"detail": "Origin not allowed"}, status_code=403)
+    return await call_next(request)
 
 # ── State ──────────────────────────────────────────────
 config = load_config()
@@ -259,8 +281,6 @@ async def api_status():
     }
 
 
-startup_time = datetime.now(timezone.utc)
-
 
 @app.post("/api/config")
 async def api_update_config(body: dict):
@@ -268,12 +288,21 @@ async def api_update_config(body: dict):
     cfg = load_config()
     # Only allow specific fields
     allowed_fields = {
+        "ai_provider",
         "deepseek_api_key", "deepseek_base_url",
+        "openai_api_key", "openai_base_url",
+        "anthropic_api_key", "anthropic_base_url",
         "daily_spending_limit", "monthly_spending_limit",
         "wmi_remote"
     }
     for key, value in body.items():
         if key in allowed_fields:
+            if key.endswith("_api_key") and isinstance(value, str) and not value.strip():
+                continue
+            if key == "ai_provider" and value not in {"deepseek", "openai", "anthropic"}:
+                raise HTTPException(400, "Unsupported AI provider")
+            if key == "wmi_remote" and not isinstance(value, dict):
+                raise HTTPException(400, "wmi_remote must be an object/dict")
             cfg[key] = value
 
     save_config(cfg)
@@ -288,77 +317,148 @@ async def api_update_config(body: dict):
     wmi_remote.username = wmi_cfg.get("username", "")
     wmi_remote.password = wmi_cfg.get("password", "")
 
-    return {"status": "ok", "configured": deepseek.is_ready()}
+    return {"status": "ok", "configured": is_configured()}
 
 
 @app.get("/api/config")
 async def api_get_config():
     """Get current config (keys masked)."""
     cfg = load_config()
-    # Mask API key
-    key = cfg.get("deepseek_api_key", "")
-    if key and len(key) > 8:
-        cfg["deepseek_api_key"] = key[:4] + "*" * (len(key) - 8) + key[-4:]
-    elif key:
-        cfg["deepseek_api_key"] = "***"
-    return {**cfg, "configured": bool(key)}
+    provider = cfg.get("ai_provider", "deepseek")
+    configured_providers = {}
+    for name in ("deepseek", "openai", "anthropic"):
+        field = f"{name}_api_key"
+        key = cfg.get(field, "")
+        configured_providers[name] = bool(key and key.strip())
+        if key and len(key) > 8:
+            cfg[field] = key[:4] + "*" * (len(key) - 8) + key[-4:]
+        elif key:
+            cfg[field] = "***"
+    return {
+        **cfg,
+        "configured": configured_providers.get(provider, False),
+        "configured_providers": configured_providers,
+    }
+
+
+@app.get("/api/health")
+async def api_health():
+    """Lightweight readiness probe for release smoke tests."""
+    return {
+        "status": "ok",
+        "configured": is_configured(),
+        "plugin_manager": plugin_manager is not None,
+    }
+
+
+CSV_COLUMN_MAP = {
+    "timestamp": ["timestamp", "date", "time", "created_at", "datetime", "日期", "时间"],
+    "model": ["model", "model_id", "model_name", "engine", "模型"],
+    "input_tokens": ["input_tokens", "prompt_tokens", "input", "prompt", "输入token", "输入 tokens"],
+    "output_tokens": ["output_tokens", "completion_tokens", "output", "completion", "输出token", "输出 tokens"],
+    "cached_tokens": ["cached_tokens", "cached_input_tokens", "cache_hit", "cached", "缓存token", "缓存 tokens"],
+    "total_tokens": ["total_tokens", "total", "tokens", "token_count", "总token", "总 tokens"],
+    "cost": ["cost", "cost_usd", "price", "spend", "expense", "费用", "消费"],
+}
+
+
+def _safe_number(value, default=0.0) -> float:
+    """Convert spreadsheet cells to float while treating blank/NaN as default."""
+    if value is None or pd.isna(value):
+        return default
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _records_from_dataframe(df: pd.DataFrame) -> tuple[list[dict], set[str], set[str]]:
+    """Normalize one usage dataframe to database records."""
+    mapped = {}
+    normalized = {str(col).strip().lower(): col for col in df.columns}
+    for target, candidates in CSV_COLUMN_MAP.items():
+        for candidate in candidates:
+            col = normalized.get(candidate.lower())
+            if col is not None:
+                mapped[target] = col
+                break
+
+    if "total_tokens" not in mapped and "input_tokens" not in mapped:
+        raise HTTPException(400, "CSV must contain at least token columns (total_tokens or input_tokens)")
+
+    records = []
+    now = datetime.now(timezone.utc).isoformat()
+    for _, row in df.iterrows():
+        input_tokens = int(_safe_number(row.get(mapped.get("input_tokens", ""), 0)))
+        output_tokens = int(_safe_number(row.get(mapped.get("output_tokens", ""), 0)))
+        total_tokens = int(_safe_number(row.get(mapped.get("total_tokens", ""), input_tokens + output_tokens)))
+        if total_tokens <= 0:
+            total_tokens = input_tokens + output_tokens
+        timestamp = row.get(mapped.get("timestamp", ""), now)
+        if timestamp is None or pd.isna(timestamp):
+            timestamp = now
+        model = row.get(mapped.get("model", ""), "imported")
+        if model is None or pd.isna(model):
+            model = "imported"
+        records.append({
+            "timestamp": str(timestamp),
+            "model": str(model),
+            "input_tokens": input_tokens,
+            "output_tokens": output_tokens,
+            "cached_tokens": int(_safe_number(row.get(mapped.get("cached_tokens", ""), 0))),
+            "total_tokens": total_tokens,
+            "cost": _safe_number(row.get(mapped.get("cost", ""), 0.0)),
+        })
+
+    return records, set(mapped.keys()), set(CSV_COLUMN_MAP.keys()) - set(mapped.keys())
 
 
 @app.post("/api/csv/import")
 async def api_csv_import(file: UploadFile = File(...)):
-    """Import CSV file with usage history data."""
-    if not file.filename or not file.filename.endswith(".csv"):
-        raise HTTPException(400, "Only CSV files are supported")
+    """Import CSV or ZIP usage history data."""
+    if not file.filename:
+        raise HTTPException(400, "A .csv or .zip file is required")
+    suffix = Path(file.filename).suffix.lower()
+    if suffix not in {".csv", ".zip"}:
+        raise HTTPException(400, "Only CSV and ZIP files are supported")
 
     try:
         content = await file.read()
-        df = pd.read_csv(io.BytesIO(content))
-
-        # Normalize columns — accept various naming conventions
-        column_map = {
-            "timestamp": ["timestamp", "date", "time", "created_at", "datetime"],
-            "model": ["model", "model_id", "model_name", "engine"],
-            "input_tokens": ["input_tokens", "prompt_tokens", "input", "prompt"],
-            "output_tokens": ["output_tokens", "completion_tokens", "output", "completion"],
-            "cached_tokens": ["cached_tokens", "cached_input_tokens", "cache_hit", "cached"],
-            "total_tokens": ["total_tokens", "total", "tokens", "token_count"],
-            "cost": ["cost", "cost_usd", "price", "spend", "expense"],
-        }
-
-        mapped = {}
-        for target, candidates in column_map.items():
-            for col in df.columns:
-                if col.strip().lower() in [c.lower() for c in candidates]:
-                    mapped[target] = col
-                    break
-
-        if "total_tokens" not in mapped and "input_tokens" not in mapped:
-            raise HTTPException(400, "CSV must contain at least token columns (total_tokens or input_tokens)")
-
-        # Convert to records
         records = []
-        for _, row in df.iterrows():
-            record = {
-                "timestamp": str(row.get(mapped.get("timestamp", ""), datetime.now(timezone.utc).isoformat())),
-                "model": str(row.get(mapped.get("model", ""), "imported")),
-                "input_tokens": int(float(row.get(mapped.get("input_tokens", ""), 0))),
-                "output_tokens": int(float(row.get(mapped.get("output_tokens", ""), 0))),
-                "cached_tokens": int(float(row.get(mapped.get("cached_tokens", ""), 0))),
-                "total_tokens": int(float(row.get(mapped.get("total_tokens", ""), 0))),
-                "cost": float(row.get(mapped.get("cost", ""), 0.0)),
-            }
-            records.append(record)
+        matched: set[str] = set()
+        unmatched: set[str] = set(CSV_COLUMN_MAP.keys())
+        parsed_files = []
+
+        if suffix == ".csv":
+            df = pd.read_csv(io.BytesIO(content))
+            parsed, file_matched, file_unmatched = _records_from_dataframe(df)
+            records.extend(parsed)
+            matched.update(file_matched)
+            unmatched.intersection_update(file_unmatched)
+            parsed_files.append(file.filename)
+        else:
+            with zipfile.ZipFile(io.BytesIO(content)) as zf:
+                csv_names = [name for name in zf.namelist() if name.lower().endswith(".csv")]
+                if not csv_names:
+                    raise HTTPException(400, "ZIP must contain at least one CSV file")
+                for name in csv_names:
+                    with zf.open(name) as csv_file:
+                        df = pd.read_csv(csv_file)
+                    parsed, file_matched, file_unmatched = _records_from_dataframe(df)
+                    records.extend(parsed)
+                    matched.update(file_matched)
+                    unmatched.intersection_update(file_unmatched)
+                    parsed_files.append(name)
 
         count = await import_csv_data(records, file.filename)
 
         return {
             "status": "ok",
             "imported": count,
-            "columns_matched": list(mapped.keys()),
-            "columns_unmatched": [c for c in [
-                "timestamp", "model", "input_tokens", "output_tokens",
-                "cached_tokens", "total_tokens", "cost"
-            ] if c not in mapped]
+            "records_seen": len(records),
+            "files_parsed": parsed_files,
+            "columns_matched": sorted(matched),
+            "columns_unmatched": sorted(unmatched),
         }
 
     except HTTPException:
@@ -722,19 +822,32 @@ async def api_analysis_models(days: int = 30):
 # Instead, a catch-all GET route serves static files while allowing WebSocket
 # and API routes to match first via normal route resolution order.
 frontend_dir = Path(__file__).parent.parent / "frontend"
+frontend_root = frontend_dir.resolve()
 
 @app.get("/{path:path}", include_in_schema=False)
-async def serve_frontend(path: str):
-    file_path = frontend_dir / path
+async def serve_frontend(path: str, request: Request):
+    raw_path = request.scope.get("raw_path", b"").decode("ascii", "ignore")
+    decoded_raw_path = unquote(raw_path)
+    if any(part == ".." for part in Path(decoded_raw_path.lstrip("/")).parts):
+        raise HTTPException(404, "Not found")
+
+    file_path = (frontend_root / path).resolve()
+    try:
+        file_path.relative_to(frontend_root)
+    except ValueError:
+        raise HTTPException(404, "Not found")
     if file_path.exists() and file_path.is_file():
         return FileResponse(file_path)
-    return FileResponse(frontend_dir / "index.html")
+    if Path(path).suffix:
+        raise HTTPException(404, "Not found")
+    return FileResponse(frontend_root / "index.html")
 
 
 # ── Entry ──────────────────────────────────────────────
 if __name__ == "__main__":
     import uvicorn
     cfg = load_config()
+    host = cfg.get("http_host", "127.0.0.1")
     port = cfg.get("http_port", 8080)
-    print(f"[Pulse] Starting on http://0.0.0.0:{port}")
-    uvicorn.run(app, host="0.0.0.0", port=port)
+    print(f"[Pulse] Starting on http://{host}:{port}")
+    uvicorn.run(app, host=host, port=port)

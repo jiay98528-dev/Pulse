@@ -1,6 +1,6 @@
 # Pulse — 项目元指令
 
-> 当前版本: v2.0-m4 | 最高设计权威: docs/需求规格说明书_v2.0.md | M1 ✅ M2 ✅ M3 ✅ M4 ✅ M5~6 ⏳
+> 当前版本: v2.0 | 最高设计权威: docs/需求规格说明书_v2.0.md | M1-M6 all complete
 
 ## 项目标识
 
@@ -35,7 +35,13 @@ D:\VibeCoding\Pulse\
 │   │   ├── deepseek.py       # Deepseek 余额采集
 │   │   └── wmi_remote.py     # WMI 远程采集 (待废弃→插件)
 │   └── plugins/              # (v2.0 新增) 插件目录
-│       └── base.py           # PluginBase 基类
+│       ├── base.py           # PluginBase 基类
+│       ├── manager.py         # PluginManager 发现/加载/生命周期
+│       └── lan_monitor/       # LAN 监控插件
+│           ├── plugin.py      # 插件入口
+│           ├── discovery.py   # UDP 广播发现
+│           ├── pairing.py     # WebSocket 配对管理
+│           └── reconnect.py   # 自动重连管理器
 ├── frontend/
 │   ├── index.html            # 5 Tab SPA
 │   ├── css/style.css         # CSS变量驱动，主题化
@@ -47,6 +53,10 @@ D:\VibeCoding\Pulse\
 │   ├── src/lib.rs            # Sidecar启动 + 系统托盘 + 插件注册
 │   ├── capabilities/default.json
 │   └── scripts/              # start-backend.bat/.sh
+├── store/
+│   ├── server.py             # FastAPI 商店服务 (端口8081)
+│   ├── requirements.txt       # 商店依赖
+│   └── store.db               # 商店 SQLite 数据库 (themes/purchases/codes)
 ├── docs/
 │   ├── 需求规格说明书_v2.0.md  # 🔴 最高设计权威 — 所有冲突以本文档为准
 │   ├── 项目全景总结.md          # 跨会话接力用

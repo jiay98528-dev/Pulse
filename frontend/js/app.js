@@ -42,6 +42,42 @@ const state = {
     lastBatteryData: null,
 };
 
+const AI_PROVIDERS = {
+    deepseek: {
+        label: 'Deepseek',
+        keyField: 'deepseek_api_key',
+        baseField: 'deepseek_base_url',
+        defaultBaseUrl: 'https://api.deepseek.com',
+        keyPlaceholder: 'sk-...',
+    },
+    openai: {
+        label: 'OpenAI',
+        keyField: 'openai_api_key',
+        baseField: 'openai_base_url',
+        defaultBaseUrl: 'https://api.openai.com',
+        keyPlaceholder: 'sk-...',
+    },
+    anthropic: {
+        label: 'Anthropic',
+        keyField: 'anthropic_api_key',
+        baseField: 'anthropic_base_url',
+        defaultBaseUrl: 'https://api.anthropic.com',
+        keyPlaceholder: 'sk-ant-...',
+    },
+};
+
+function getBackendBase() {
+    const loc = window.location;
+    const localHttp = (loc.protocol === 'http:' || loc.protocol === 'https:') &&
+        (loc.hostname === '127.0.0.1' || loc.hostname === 'localhost') &&
+        (!loc.port || loc.port === '8080');
+    return localHttp ? '' : 'http://127.0.0.1:8080';
+}
+
+function apiUrl(path) {
+    return getBackendBase() + path;
+}
+
 // ── Widget Registry ──────────────────────────────────
 var WidgetRegistry = {
     cpu:     { name: 'CPU',      icon: '⚙', sizes: ['S', 'M'],     defaultSize: 'S', source: 'system' },
@@ -770,8 +806,11 @@ function formatUptime(seconds) {
 
 function getWsUrl() {
     const loc = window.location;
-    const port = loc.port || '8080';
-    return `ws://${loc.hostname}:${port}/ws`;
+    const backend = getBackendBase();
+    if (backend) return backend.replace(/^http/, 'ws') + '/ws';
+    const scheme = loc.protocol === 'https:' ? 'wss' : 'ws';
+    const host = loc.host || '127.0.0.1:8080';
+    return scheme + '://' + host + '/ws';
 }
 
 // ── WebSocket ────────────────────────────────────────
@@ -865,45 +904,6 @@ function updateSystemData(data) {
     const gpu = data.gpu?.[0] ? { name: data.gpu[0].name } : null;
     const temps = data.temperature;
     const netSpeed = data.network_speed;
-
-    // ─ Update Dashboard System Bar (if present — legacy fallback) ─
-    if ($('#sysCpuFill')) {
-        $('#sysCpuFill').style.width = cpu + '%';
-        $('#sysCpuVal').textContent = cpu.toFixed(1) + '%';
-        $('#sysMemFill').style.width = mem + '%';
-        $('#sysMemVal').textContent = mem.toFixed(1) + '%';
-        $('#sysDiskFill').style.width = disk + '%';
-        $('#sysDiskVal').textContent = disk.toFixed(1) + '%';
-        $('#sysGpuFill').style.width = '0%';
-        $('#sysGpuVal').textContent = gpu ? 'Active' : '—';
-
-        // Temperature
-        var tempStr = '—';
-        if (temps) {
-            for (var tk of Object.keys(temps)) {
-                var tentries = temps[tk];
-                if (tentries && tentries.length > 0) {
-                    var tcur = tentries[0].current;
-                    if (tcur) {
-                        tempStr = tcur.toFixed(0) + '°C';
-                        break;
-                    }
-                }
-            }
-        }
-        $('#sysTemp').textContent = tempStr;
-
-        // Network
-        if (netSpeed) {
-            var up = formatSpeed(netSpeed.sent_per_sec);
-            var down = formatSpeed(netSpeed.recv_per_sec);
-            $('#sysNet').textContent = '↓' + down + ' ↑' + up;
-        }
-
-        // Last update
-        var ts = data.timestamp ? new Date(data.timestamp).toLocaleTimeString() : new Date().toLocaleTimeString();
-        $('#sysLastUpdate').textContent = ts;
-    }
 
     // ─ Update System Tab ─
     const host = data.host || {};
@@ -1055,12 +1055,6 @@ function updateSystemData(data) {
 // ── Deepseek Data Update ─────────────────────────────
 function updateDeepseekData(data) {
     if (!data) return;
-    if (data.needs_config) {
-        var tte = $('#todayTokens'); if (tte) tte.textContent = '未配置';
-        var abe = $('#accountBalance'); if (abe) abe.textContent = '—';
-        var tce = $('#todayCost'); if (tce) tce.textContent = '—';
-        return;
-    }
     // Balance
     var balance = data.balance;
     if (balance) {
@@ -1082,17 +1076,6 @@ function updateDeepseekData(data) {
             }
         }
     }
-    // Keep token/cost cards showing placeholder (no auto-collected data anymore)
-    var tte2 = $('#todayTokens'); if (tte2) tte2.textContent = '—';
-    var tie = $('#todayInput'); if (tie) tie.textContent = '—';
-    var toe = $('#todayOutput'); if (toe) toe.textContent = '—';
-    var tce2 = $('#todayCached'); if (tce2) tce2.textContent = '—';
-    var tce3 = $('#todayCost'); if (tce3) tce3.textContent = '—';
-    var mce = $('#monthCost'); if (mce) mce.textContent = '—';
-    var wce = $('#weekCost'); if (wce) wce.textContent = '—';
-    var cre = $('#cacheRate'); if (cre) cre.textContent = '—';
-    var ame = $('#activeModels'); if (ame) ame.textContent = '—';
-    var mle = $('#modelList'); if (mle) mle.textContent = '导入CSV后显示';
 }
 
 // ── Chart Initialization ────────────────────────────
@@ -1137,70 +1120,6 @@ const chartDefaults = {
         },
     },
 };
-
-// ── Dashboard Charts ────────────────────────────────
-
-// Token Trend Chart (7-day)
-function initTokenTrendChart() {
-    const ctx = document.getElementById('tokenTrendChart');
-    if (!ctx) return null;
-
-    state.charts.tokenTrend = new Chart(ctx, {
-        type: 'line',
-        data: {
-            labels: [],
-            datasets: [{
-                label: '总 Token',
-                data: [],
-                borderColor: chartColors.red,
-                backgroundColor: 'transparent',
-                borderWidth: 3,
-                tension: 0,
-                pointRadius: 0,
-                pointHoverRadius: 6,
-                fill: false,
-            }, {
-                label: '输入 Token',
-                data: [],
-                borderColor: chartColors.grey,
-                backgroundColor: 'transparent',
-                borderWidth: 2,
-                tension: 0,
-                pointRadius: 0,
-                pointHoverRadius: 4,
-                borderDash: [4, 4],
-                fill: false,
-            }],
-        },
-        options: {
-            ...chartDefaults,
-            scales: {
-                ...chartDefaults.scales,
-                y: {
-                    ...chartDefaults.scales.y,
-                    ticks: {
-                        ...chartDefaults.scales.y.ticks,
-                        callback: (val) => formatNumber(val),
-                    },
-                },
-            },
-            plugins: {
-                ...chartDefaults.plugins,
-                legend: {
-                    display: true,
-                    position: 'top',
-                    labels: {
-                        color: chartColors.grey,
-                        font: { family: "'JetBrains Mono', monospace", size: 10 },
-                        padding: 16,
-                        usePointStyle: true,
-                    },
-                },
-            },
-        },
-    });
-    return state.charts.tokenTrend;
-}
 
 // Model Breakdown (Bar)
 function initModelBreakdownChart() {
@@ -1617,71 +1536,191 @@ function initHistoryTrendChart() {
     });
 }
 
-// ── Chart Updates ───────────────────────────────────
+async function loadAnalysisData() {
+    var daysEl = document.getElementById('analysisRangeDays');
+    var modelEl = document.getElementById('analysisModelFilter');
+    var days = parseInt(daysEl ? daysEl.value : '30', 10) || 30;
+    var model = modelEl ? modelEl.value : '';
+    var modelParam = model ? '&model=' + encodeURIComponent(model) : '';
 
-function updateDeepseekCharts() {
-    // Token Trend Chart
-    const trendChart = state.charts.tokenTrend;
-    if (trendChart && state.tokenHistory.length > 0) {
-        // Group by date
-        const byDate = {};
-        state.tokenHistory.forEach(r => {
-            const d = r.timestamp ? r.timestamp.substring(0, 10) : '';
-            if (!d) return;
-            if (!byDate[d]) byDate[d] = { total: 0, input: 0 };
-            byDate[d].total += Number(r.total_tokens) || 0;
-            byDate[d].input += Number(r.input_tokens) || 0;
-        });
+    try {
+        var summaryResp = await fetch(apiUrl('/api/analysis/summary?days=' + days));
+        var historyResp = await fetch(apiUrl('/api/analysis/history?days=' + days + modelParam));
+        var modelsResp = await fetch(apiUrl('/api/analysis/models?days=' + days));
+        if (!summaryResp.ok || !historyResp.ok || !modelsResp.ok) {
+            throw new Error('analysis API failed');
+        }
+        var summary = await summaryResp.json();
+        var history = await historyResp.json();
+        var models = await modelsResp.json();
 
-        const dates = Object.keys(byDate).sort();
-        trendChart.data.labels = dates.map(d => d.substring(5));
-        trendChart.data.datasets[0].data = dates.map(d => byDate[d].total);
-        trendChart.data.datasets[1].data = dates.map(d => byDate[d].input);
-        trendChart.update('none');
-    }
-
-    // Model Breakdown
-    // This gets updated from model_breakdown data - need latest state
-    // Will be updated when deepseek data arrives with model info
-
-    // Cache Rate Doughnut
-    const cacheChart = state.charts.cacheRate;
-    if (cacheChart) {
-        const todayTotal = Number($('#todayTokens').textContent.replace(/[^0-9.]/g, '')) || 0;
-        const cached = Number($('#todayCached').textContent.replace(/[^0-9.]/g, '')) || 0;
-        const hit = Math.min(cached, todayTotal);
-        const miss = Math.max(0, todayTotal - hit);
-        cacheChart.data.datasets[0].data = todayTotal > 0 ? [hit, miss] : [0, 100];
-        cacheChart.update('none');
-    }
-
-    // Cost Trend
-    const costChart = state.charts.costTrend;
-    if (costChart && state.tokenHistory.length > 0) {
-        const byDate = {};
-        state.tokenHistory.forEach(r => {
-            const d = r.timestamp ? r.timestamp.substring(0, 10) : '';
-            if (!d) return;
-            if (!byDate[d]) byDate[d] = 0;
-            byDate[d] += Number(r.cost) || 0;
-        });
-        const dates = Object.keys(byDate).sort();
-        costChart.data.labels = dates.map(d => d.substring(5));
-        costChart.data.datasets[0].data = dates.map(d => byDate[d]);
-        costChart.update('none');
+        state.tokenHistory = Array.isArray(history) ? history : [];
+        updateAnalysisKpis(summary, models);
+        updateAnalysisModelFilter(models, model);
+        updateAnalysisCharts(summary, state.tokenHistory, models);
+        updateAnalysisTable(state.tokenHistory);
+    } catch (e) {
+        showToast('分析数据加载失败: ' + e.message, 'error');
     }
 }
 
-function updateDeepseekWithModelData(data) {
-    const modelChart = state.charts.modelBreakdown;
-    if (!modelChart) return;
+function updateAnalysisKpis(summary, models) {
+    var totalTokens = Number(summary.total_tokens) || 0;
+    var totalCached = Number(summary.total_cached) || 0;
+    var cacheRate = totalTokens > 0 ? (totalCached / totalTokens * 100).toFixed(1) + '%' : '—';
+    var topModel = Array.isArray(models) && models.length > 0 ? models[0].model : '—';
+    var totalCost = Number(summary.total_cost) || 0;
+    if ($('#analysisTotalTokens')) $('#analysisTotalTokens').textContent = formatNumber(totalTokens);
+    if ($('#analysisTotalCost')) $('#analysisTotalCost').textContent = '¥' + totalCost.toFixed(4);
+    if ($('#analysisCacheRate')) $('#analysisCacheRate').textContent = cacheRate;
+    if ($('#analysisTopModel')) $('#analysisTopModel').textContent = topModel;
+}
 
-    const models = data.model_breakdown || [];
-    if (models.length > 0) {
-        modelChart.data.labels = models.map(m => m.model.substring(0, 16));
-        modelChart.data.datasets[0].data = models.map(m => Number(m.total_tokens) || 0);
+function updateAnalysisModelFilter(models, selected) {
+    var select = document.getElementById('analysisModelFilter');
+    if (!select || !Array.isArray(models)) return;
+    var current = selected || select.value;
+    select.innerHTML = '<option value="">全部模型</option>';
+    models.forEach(function(m) {
+        var opt = document.createElement('option');
+        opt.value = m.model;
+        opt.textContent = m.model;
+        select.appendChild(opt);
+    });
+    select.value = current;
+}
+
+function groupUsageByDate(history) {
+    var byDate = {};
+    history.forEach(function(r) {
+        var d = r.timestamp ? String(r.timestamp).substring(0, 10) : '';
+        if (!d) return;
+        if (!byDate[d]) byDate[d] = { total: 0, cost: 0, input: 0, output: 0, cached: 0 };
+        byDate[d].total += Number(r.total_tokens) || 0;
+        byDate[d].cost += Number(r.cost) || 0;
+        byDate[d].input += Number(r.input_tokens) || 0;
+        byDate[d].output += Number(r.output_tokens) || 0;
+        byDate[d].cached += Number(r.cached_tokens) || 0;
+    });
+    return byDate;
+}
+
+function updateAnalysisCharts(summary, history, models) {
+    var byDate = groupUsageByDate(history);
+    var dates = Object.keys(byDate).sort();
+    var labels = dates.map(function(d) { return d.substring(5); });
+    var compareMode = !!(document.getElementById('analysisCompareMode') && document.getElementById('analysisCompareMode').checked);
+
+    var historyChart = state.charts.historyTrend;
+    if (historyChart) {
+        historyChart.data.labels = labels;
+        if (compareMode) {
+            historyChart.data.datasets = [{
+                label: '输入 Token',
+                data: dates.map(function(d) { return byDate[d].input; }),
+                borderColor: chartColors.red,
+                backgroundColor: 'transparent',
+                borderWidth: 3,
+                tension: 0,
+                pointRadius: 0,
+                pointHoverRadius: 6,
+                fill: false,
+            }, {
+                label: '输出 Token',
+                data: dates.map(function(d) { return byDate[d].output; }),
+                borderColor: chartColors.white,
+                backgroundColor: 'transparent',
+                borderWidth: 2,
+                tension: 0,
+                pointRadius: 0,
+                pointHoverRadius: 4,
+                borderDash: [4, 4],
+                fill: false,
+            }, {
+                label: '缓存 Token',
+                data: dates.map(function(d) { return byDate[d].cached; }),
+                borderColor: chartColors.yellow,
+                backgroundColor: 'transparent',
+                borderWidth: 2,
+                tension: 0,
+                pointRadius: 0,
+                pointHoverRadius: 4,
+                borderDash: [2, 4],
+                fill: false,
+            }];
+            historyChart.options.scales.y1.display = false;
+        } else {
+            historyChart.data.datasets = [{
+                label: '总 Token',
+                data: dates.map(function(d) { return byDate[d].total; }),
+                borderColor: chartColors.red,
+                backgroundColor: 'transparent',
+                borderWidth: 3,
+                tension: 0,
+                pointRadius: 0,
+                pointHoverRadius: 6,
+                fill: false,
+            }, {
+                label: '消费 (¥)',
+                data: dates.map(function(d) { return byDate[d].cost; }),
+                borderColor: chartColors.yellow,
+                backgroundColor: 'transparent',
+                borderWidth: 2,
+                tension: 0,
+                pointRadius: 0,
+                pointHoverRadius: 4,
+                borderDash: [4, 4],
+                yAxisID: 'y1',
+                fill: false,
+            }];
+            historyChart.options.scales.y1.display = true;
+        }
+        historyChart.update('none');
+    }
+
+    var costChart = state.charts.costTrend;
+    if (costChart) {
+        costChart.data.labels = labels;
+        costChart.data.datasets[0].data = dates.map(function(d) { return byDate[d].cost; });
+        costChart.update('none');
+    }
+
+    var modelChart = state.charts.modelBreakdown;
+    if (modelChart && Array.isArray(models)) {
+        modelChart.data.labels = models.map(function(m) { return String(m.model).substring(0, 16); });
+        modelChart.data.datasets[0].data = models.map(function(m) { return Number(m.total_tokens) || 0; });
         modelChart.update('none');
     }
+
+    var cacheChart = state.charts.cacheRate;
+    if (cacheChart) {
+        var total = Number(summary.total_tokens) || 0;
+        var cached = Number(summary.total_cached) || 0;
+        cacheChart.data.datasets[0].data = total > 0 ? [cached, Math.max(0, total - cached)] : [0, 100];
+        cacheChart.update('none');
+    }
+}
+
+function updateAnalysisTable(history) {
+    var body = document.getElementById('analysisTableBody');
+    if (!body) return;
+    if (!Array.isArray(history) || history.length === 0) {
+        body.innerHTML = '<tr><td colspan="7">暂无导入数据</td></tr>';
+        return;
+    }
+    body.innerHTML = '';
+    history.slice().reverse().slice(0, 200).forEach(function(r) {
+        var tr = document.createElement('tr');
+        tr.innerHTML =
+            '<td>' + escapeHtml(String(r.timestamp || '').substring(0, 19)) + '</td>' +
+            '<td>' + escapeHtml(r.model || '—') + '</td>' +
+            '<td>' + formatNumber(Number(r.input_tokens) || 0) + '</td>' +
+            '<td>' + formatNumber(Number(r.output_tokens) || 0) + '</td>' +
+            '<td>' + formatNumber(Number(r.cached_tokens) || 0) + '</td>' +
+            '<td>' + formatNumber(Number(r.total_tokens) || 0) + '</td>' +
+            '<td>¥' + (Number(r.cost) || 0).toFixed(4) + '</td>';
+        body.appendChild(tr);
+    });
 }
 
 function updateRealtimeCharts() {
@@ -1784,8 +1823,9 @@ if (fileInput) {
 }
 
 function handleCsvFile(file) {
-    if (!file.name.endsWith('.csv')) {
-        showCsvResult('仅支持 CSV 文件', 'error');
+    var lowerName = file.name.toLowerCase();
+    if (!lowerName.endsWith('.csv') && !lowerName.endsWith('.zip')) {
+        showCsvResult('仅支持 CSV 或 ZIP 文件', 'error');
         return;
     }
     state.pendingCsvFile = file;
@@ -1808,20 +1848,20 @@ $('#csvImportBtn')?.addEventListener('click', async () => {
     formData.append('file', state.pendingCsvFile);
 
     try {
-        const resp = await fetch('/api/csv/import', {
+        const resp = await fetch(apiUrl('/api/csv/import'), {
             method: 'POST',
             body: formData,
         });
         const result = await resp.json();
         if (result.status === 'ok') {
-            const msg = '✓ 成功导入 ' + result.imported + ' 条记录';
+            let msg = '✓ 成功导入 ' + result.imported + ' 条记录';
             if (result.columns_unmatched && result.columns_unmatched.length > 0) {
                 msg += ' (未匹配列: ' + result.columns_unmatched.join(', ') + ')';
             }
             showCsvResult(msg, 'success');
             state.pendingCsvFile = null;
-            // Refresh data
-            setTimeout(() => location.reload(), 1500);
+            if ($('#csvPreview')) $('#csvPreview').classList.add('hidden');
+            await loadAnalysisData();
         } else {
             showCsvResult('✕ 导入失败', 'error');
         }
@@ -1835,9 +1875,10 @@ $('#csvImportBtn')?.addEventListener('click', async () => {
 // Auto-hide AI widgets when no API key configured
 async function checkAiWidgets() {
     try {
-        var resp = await fetch('/api/config');
+        var resp = await fetch(apiUrl('/api/config'));
         var cfg = await resp.json();
-        var configured = !!cfg.configured;
+        var providers = cfg.configured_providers || {};
+        var configured = !!providers.deepseek;
         WidgetEngine.setVisibility('balance', configured);
         WidgetEngine.setVisibility('tokens', configured);
         WidgetEngine.setVisibility('cache', configured);
@@ -1848,21 +1889,39 @@ async function checkAiWidgets() {
     }
 }
 
+function getSelectedProvider() {
+    var providerEl = document.getElementById('settings-provider');
+    var provider = providerEl ? providerEl.value : (state.config.ai_provider || 'deepseek');
+    return AI_PROVIDERS[provider] ? provider : 'deepseek';
+}
+
+function renderProviderSettings(provider) {
+    provider = AI_PROVIDERS[provider] ? provider : 'deepseek';
+    var meta = AI_PROVIDERS[provider];
+    var cfg = state.config || {};
+    var providerEl = document.getElementById('settings-provider');
+    var keyEl = document.getElementById('settings-api-key');
+    var baseEl = document.getElementById('settings-base-url');
+    if (providerEl) providerEl.value = provider;
+    if (keyEl) {
+        var configured = !!(cfg.configured_providers && cfg.configured_providers[provider]);
+        keyEl.value = '';
+        keyEl.placeholder = configured ? meta.label + ' 已配置，留空则不修改' : meta.keyPlaceholder;
+    }
+    if (baseEl) baseEl.value = cfg[meta.baseField] || meta.defaultBaseUrl;
+}
+
 // Load config
 async function loadConfig() {
     try {
-        const resp = await fetch('/api/config');
+        const resp = await fetch(apiUrl('/api/config'));
         state.config = await resp.json();
         const cfg = state.config;
 
-        if ($('#cfgApiKey')) $('#cfgApiKey').placeholder = cfg.deepseek_api_key ? '已配置: ' + cfg.deepseek_api_key.substring(0, 8) + '...' : 'sk-...';
-        if ($('#cfgBaseUrl')) $('#cfgBaseUrl').value = cfg.deepseek_base_url || 'https://api.deepseek.com';
-        if ($('#cfgDailyLimit')) $('#cfgDailyLimit').value = cfg.daily_spending_limit || 5;
-        if ($('#cfgMonthlyLimit')) $('#cfgMonthlyLimit').value = cfg.monthly_spending_limit || 100;
+        renderProviderSettings(cfg.ai_provider || 'deepseek');
+        if ($('#settings-daily-limit')) $('#settings-daily-limit').value = cfg.daily_spending_limit || 5;
+        if ($('#settings-monthly-limit')) $('#settings-monthly-limit').value = cfg.monthly_spending_limit || 100;
 
-        const wmi = cfg.wmi_remote || {};
-        if ($('#cfgWmiHost')) $('#cfgWmiHost').value = wmi.host || '';
-        if ($('#cfgWmiUser')) $('#cfgWmiUser').value = wmi.username || '';
     } catch (e) {
         console.warn('Failed to load config:', e);
     }
@@ -1871,7 +1930,7 @@ async function loadConfig() {
 // Save Config
 async function saveConfig(body, statusEl) {
     try {
-        const resp = await fetch('/api/config', {
+        const resp = await fetch(apiUrl('/api/config'), {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(body),
@@ -1898,34 +1957,6 @@ async function saveConfig(body, statusEl) {
     }
 }
 
-$('#saveApiConfig')?.addEventListener('click', () => {
-    saveConfig({
-        deepseek_api_key: $('#cfgApiKey').value,
-        deepseek_base_url: $('#cfgBaseUrl').value,
-    }, $('#apiConfigStatus'));
-});
-
-$('#saveLimitConfig')?.addEventListener('click', () => {
-    saveConfig({
-        daily_spending_limit: parseFloat($('#cfgDailyLimit').value) || 5,
-        monthly_spending_limit: parseFloat($('#cfgMonthlyLimit').value) || 100,
-    }, $('#limitConfigStatus'));
-});
-
-$('#saveWmiConfig')?.addEventListener('click', () => {
-    saveConfig({
-        wmi_remote: {
-            host: $('#cfgWmiHost').value,
-            username: $('#cfgWmiUser').value,
-            password: $('#cfgWmiPass').value,
-        }
-    }, $('#wmiConfigStatus'));
-});
-
-// ── Alert Close ────────────────────────────────────
-$('#limitAlertClose')?.addEventListener('click', () => {
-    $('#limitAlert').classList.add('hidden');
-});
 
 // ── Init ────────────────────────────────────────────
 function init() {
@@ -1944,6 +1975,15 @@ function init() {
     initHwNetChart();
     initHwBatteryChart();
     initHistoryTrendChart();
+    initModelBreakdownChart();
+    initCacheRateChart();
+    initCostTrendChart();
+    loadAnalysisData();
+
+    $('#analysisRangeDays')?.addEventListener('change', loadAnalysisData);
+    $('#analysisModelFilter')?.addEventListener('change', loadAnalysisData);
+    $('#analysisCompareMode')?.addEventListener('change', loadAnalysisData);
+    $('#analysisRefreshBtn')?.addEventListener('click', loadAnalysisData);
 
     // Connect WebSocket
     connectWs();
@@ -2009,7 +2049,7 @@ function showToast(msg, type) {
 
 // --- First-run Setup ---
 function checkFirstRun() {
-  fetch("/api/config").then(function(r) { return r.json(); }).then(function(cfg) {
+  fetch(apiUrl("/api/config")).then(function(r) { return r.json(); }).then(function(cfg) {
     if (cfg.configured) {
       var el = document.getElementById("setup-overlay");
       if (el) el.classList.add("hidden");
@@ -2028,9 +2068,10 @@ function initSetupForm() {
     e.preventDefault();
     var btn = form.querySelector(".setup-btn");
     btn.textContent = "SAVING..."; btn.disabled = true;
-    fetch("/api/config", {
+    fetch(apiUrl("/api/config"), {
       method: "POST", headers: {"Content-Type":"application/json"},
       body: JSON.stringify({
+        ai_provider: 'deepseek',
         deepseek_api_key: document.getElementById("setup-api-key").value,
         deepseek_base_url: document.getElementById("setup-base-url").value,
         daily_spending_limit: parseFloat(document.getElementById("setup-daily-limit").value) || 5,
@@ -2047,18 +2088,32 @@ function initSetupForm() {
 function initSettingsForm() {
   var form = document.getElementById("settings-form");
   if (!form) return;
+  var providerSelect = document.getElementById("settings-provider");
+  if (providerSelect) {
+    providerSelect.onchange = function() {
+      renderProviderSettings(getSelectedProvider());
+    };
+  }
   form.onsubmit = function(e) {
     e.preventDefault();
-    fetch("/api/config", {
-      method: "POST", headers: {"Content-Type":"application/json"},
-      body: JSON.stringify({
-        deepseek_api_key: document.getElementById("settings-api-key").value,
-        deepseek_base_url: document.getElementById("settings-base-url").value,
+    var provider = getSelectedProvider();
+    var meta = AI_PROVIDERS[provider];
+    var payload = {
+        ai_provider: provider,
+        [meta.baseField]: document.getElementById("settings-base-url").value || meta.defaultBaseUrl,
         daily_spending_limit: parseFloat(document.getElementById("settings-daily-limit").value) || 5,
         monthly_spending_limit: parseFloat(document.getElementById("settings-monthly-limit").value) || 100,
-      })
+    };
+    var apiKey = document.getElementById("settings-api-key").value.trim();
+    if (apiKey) payload[meta.keyField] = apiKey;
+    fetch(apiUrl("/api/config"), {
+      method: "POST", headers: {"Content-Type":"application/json"},
+      body: JSON.stringify(payload)
     }).then(function(r) {
-      if (r.ok) showToast("Config saved","success");
+      if (r.ok) {
+        showToast("Config saved","success");
+        loadConfig();
+      }
       else showToast("Save failed","error");
     }).catch(function(e) { showToast("Error","error"); });
   };
@@ -2078,7 +2133,7 @@ function initAutostartToggle() {
 //  Theme Engine (M4.1)
 //  JSON→CSS变量→图表重绘
 // ══════════════════════════════════════════════════
-const STORE_API = 'http://localhost:8081'; // 商店后端地址
+const STORE_API = 'http://127.0.0.1:8081'; // 商店后端地址
 
 var ThemeEngine = {
     activeThemeId: null,
@@ -2193,6 +2248,136 @@ var ThemeEngine = {
         return !!this.installedThemes[themeId];
     }
 };
+
+function collectThemeEditorTokens() {
+    return {
+        'color-red': document.getElementById('theme-color-red').value,
+        'color-black': document.getElementById('theme-color-black').value,
+        'color-white': document.getElementById('theme-color-white').value,
+        'color-grey-10': document.getElementById('theme-color-grey-10').value,
+        'color-grey-30': document.getElementById('theme-color-grey-30').value,
+        'color-grey-50': document.getElementById('theme-color-grey-50').value,
+        'color-yellow': document.getElementById('theme-color-yellow').value,
+        'color-green': document.getElementById('theme-color-green').value,
+        'font-display': document.getElementById('theme-font-display').value,
+        'font-heading': document.getElementById('theme-font-display').value,
+        'font-body': document.getElementById('theme-font-body').value,
+        'font-mono': document.getElementById('theme-font-mono').value,
+        'text-base': (Number(document.getElementById('theme-text-base').value) || 16) + 'px',
+        'text-lg': (Number(document.getElementById('theme-text-lg').value) || 20) + 'px',
+        'text-4xl': (Number(document.getElementById('theme-text-4xl').value) || 56) + 'px',
+    };
+}
+
+function applyThemeEditor() {
+    ThemeEngine.activate({
+        id: 'custom-local',
+        name: '本地自定义主题',
+        author: 'Local',
+        type: 'custom',
+        tokens: collectThemeEditorTokens(),
+        customCSS: '',
+    });
+}
+
+function normalizeThemePayload(theme) {
+    if (!theme || typeof theme !== 'object') throw new Error('主题文件格式无效');
+    if (!theme.tokens || typeof theme.tokens !== 'object') throw new Error('主题缺少 tokens');
+    theme.id = theme.id || ('local-' + Date.now());
+    theme.name = theme.name || '本地主题';
+    theme.author = theme.author || 'Local';
+    theme.type = theme.type || 'custom';
+    return theme;
+}
+
+function installThemeFile(file) {
+    if (!file) return;
+    var lower = file.name.toLowerCase();
+    if (!lower.endsWith('.pulse-theme') && !lower.endsWith('.json')) {
+        showToast('仅支持 .pulse-theme 或 JSON 主题文件', 'error');
+        return;
+    }
+    var reader = new FileReader();
+    reader.onload = function() {
+        try {
+            var theme = normalizeThemePayload(JSON.parse(String(reader.result || '{}')));
+            ThemeEngine.install(theme);
+        } catch (e) {
+            showToast('主题安装失败: ' + e.message, 'error');
+        }
+    };
+    reader.onerror = function() {
+        showToast('主题文件读取失败', 'error');
+    };
+    reader.readAsText(file, 'utf-8');
+}
+
+function exportThemeFile() {
+    var theme = {
+        id: 'custom-' + new Date().toISOString().slice(0, 10),
+        name: 'Pulse Custom Theme',
+        author: 'Local',
+        type: 'custom',
+        version: '1.0.0',
+        tokens: collectThemeEditorTokens(),
+        customCSS: '',
+    };
+    var blob = new Blob([JSON.stringify(theme, null, 2)], { type: 'application/json' });
+    var url = URL.createObjectURL(blob);
+    var a = document.createElement('a');
+    a.href = url;
+    a.download = 'pulse-custom.pulse-theme';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+}
+
+function initThemeTools() {
+    var drop = document.getElementById('themeDropZone');
+    var input = document.getElementById('themeFileInput');
+    var importBtn = document.getElementById('themeImportBtn');
+    var exportBtn = document.getElementById('themeExportBtn');
+    var resetBtn = document.getElementById('themeResetBtn');
+    if (importBtn && input) {
+        importBtn.addEventListener('click', function(e) {
+            e.stopPropagation();
+            input.click();
+        });
+    }
+    if (input) {
+        input.addEventListener('change', function() {
+            if (input.files && input.files[0]) installThemeFile(input.files[0]);
+            input.value = '';
+        });
+    }
+    if (drop) {
+        drop.addEventListener('click', function() {
+            if (input) input.click();
+        });
+        drop.addEventListener('dragover', function(e) {
+            e.preventDefault();
+            drop.classList.add('drag-over');
+        });
+        drop.addEventListener('dragleave', function() {
+            drop.classList.remove('drag-over');
+        });
+        drop.addEventListener('drop', function(e) {
+            e.preventDefault();
+            drop.classList.remove('drag-over');
+            if (e.dataTransfer.files && e.dataTransfer.files[0]) {
+                installThemeFile(e.dataTransfer.files[0]);
+            }
+        });
+    }
+    document.querySelectorAll('#themeEditor input').forEach(function(el) {
+        el.addEventListener('input', applyThemeEditor);
+    });
+    if (exportBtn) exportBtn.addEventListener('click', exportThemeFile);
+    if (resetBtn) resetBtn.addEventListener('click', function() {
+        ThemeEngine.resetToDefault();
+    });
+}
 
 // ══════════════════════════════════════════════════
 //  Marketplace (M6.5)
@@ -2365,8 +2550,8 @@ async function buyTheme(theme) {
             var paymentLabel = document.getElementById('purchase-payment-label');
             if (paymentLabel) paymentLabel.textContent = payment === 'wechat' ? '微信' : '支付宝';
             var qrImg = document.getElementById('purchase-qr-img');
-            if (qrImg && result.qr_code) {
-                qrImg.src = result.qr_code;
+            if (qrImg && (result.qr_code || result.qr_code_url)) {
+                qrImg.src = result.qr_code || result.qr_code_url;
             }
             var purchaseId = result.purchase_id || result.id;
             if (purchaseId) {
@@ -2621,7 +2806,7 @@ function loadDevices() {
   var c = document.getElementById("device-list");
   if (!c) return;
   c.innerHTML = "<div class=loading-spinner></div>";
-  fetch("/api/devices").then(function(r) { return r.json(); }).then(function(devices) {
+  fetch(apiUrl("/api/devices")).then(function(r) { return r.json(); }).then(function(devices) {
     if (!devices || devices.length === 0) {
       c.innerHTML = "<div class=empty-state><div class=icon>No Devices</div><div class=text>Click above to add your first device</div></div>";
       return;
@@ -2633,12 +2818,16 @@ function loadDevices() {
       card.className = "device-card";
       card.innerHTML =
         "<div class=device-info>" +
-          "<div class=device-name><span class=device-status " + (d.enabled ? "online" : "offline") + "></span>" + d.name + "</div>" +
-          "<div class=device-host>" + d.host + ":" + (d.port || 135) + "</div>" +
+          "<div class=device-name><span class=device-status " + (d.enabled ? "online" : "offline") + "></span>" + escapeHtml(d.name) + "</div>" +
+          "<div class=device-host>" + escapeHtml(d.host) + ":" + (d.port || 135) + "</div>" +
         "</div>" +
         "<div class=device-actions>" +
-          "<button class=btn-secondary onclick=deleteDevice(" + d.id + ")>DELETE</button>" +
+          "<button class=\"btn-secondary device-delete-btn\" type=\"button\">DELETE</button>" +
         "</div>";
+      (function(deviceId) {
+        var btn = card.querySelector('.device-delete-btn');
+        if (btn) btn.addEventListener('click', function() { deleteDevice(deviceId); });
+      })(d.id);
       c.appendChild(card);
     }
   }).catch(function(e) {
@@ -2648,7 +2837,7 @@ function loadDevices() {
 
 function deleteDevice(id) {
   if (!confirm("Delete this device?")) return;
-  fetch("/api/devices/" + id, {method:"DELETE"}).then(function() {
+  fetch(apiUrl("/api/devices/" + id), {method:"DELETE"}).then(function() {
     showToast("Device deleted","success");
     loadDevices();
   });
@@ -2667,7 +2856,7 @@ function initDeviceForm() {
       port: parseInt(document.getElementById("device-port").value) || 135,
       enabled: document.getElementById("device-enabled").checked,
     };
-    fetch("/api/devices", {
+    fetch(apiUrl("/api/devices"), {
       method: "POST", headers: {"Content-Type":"application/json"},
       body: JSON.stringify(payload),
     }).then(function(r) {
@@ -2678,12 +2867,121 @@ function initDeviceForm() {
       } else showToast("Save failed","error");
     }).catch(function(e) { showToast("Error","error"); });
   };
-  document.getElementById("device-form-cancel").onclick = function() {
+  var cancelBtn = document.getElementById("device-form-cancel");
+  if (cancelBtn) cancelBtn.onclick = function() {
     document.getElementById("device-form-overlay").classList.add("hidden");
   };
-  document.getElementById("device-add-btn").onclick = function() {
-    document.getElementById("device-form-overlay").classList.remove("hidden");
-  };
+  var addButtons = [
+    document.getElementById("device-add-btn"),
+    document.getElementById("hwAddDeviceBtn"),
+  ].filter(Boolean);
+  addButtons.forEach(function(btn) {
+    btn.onclick = function() {
+      document.getElementById("device-form-overlay").classList.remove("hidden");
+    };
+  });
+}
+
+// --- Plugins ---
+async function loadPlugins() {
+  var list = document.getElementById("plugin-list");
+  var empty = document.getElementById("plugin-empty");
+  if (!list) return;
+  list.innerHTML = "<div class=loading-spinner></div>";
+  try {
+    var resp = await fetch(apiUrl("/api/plugins"));
+    if (!resp.ok) throw new Error("HTTP " + resp.status);
+    var plugins = await resp.json();
+    if (!Array.isArray(plugins) || plugins.length === 0) {
+      list.innerHTML = "";
+      if (empty) empty.classList.remove("hidden");
+      return;
+    }
+    if (empty) empty.classList.add("hidden");
+    list.innerHTML = "";
+    for (var i = 0; i < plugins.length; i++) {
+      list.appendChild(await createPluginCard(plugins[i]));
+    }
+  } catch (e) {
+    list.innerHTML = "<div class=empty-state>插件加载失败: " + escapeHtml(e.message) + "</div>";
+  }
+}
+
+async function createPluginCard(plugin) {
+  var card = document.createElement("div");
+  card.className = "plugin-card" + (plugin.enabled ? "" : " disabled");
+  var pairedCount = "—";
+  if (plugin.name === "LAN 设备监控") {
+    try {
+      var pairedResp = await fetch(apiUrl("/api/lan/devices"));
+      if (pairedResp.ok) {
+        var paired = await pairedResp.json();
+        pairedCount = Array.isArray(paired) ? paired.length : 0;
+      }
+    } catch (e) {
+      pairedCount = "—";
+    }
+  }
+
+  card.innerHTML =
+    "<div class=plugin-card-head>" +
+      "<div>" +
+        "<div class=plugin-title>" + escapeHtml(plugin.name || "Unknown Plugin") + "</div>" +
+        "<div class=plugin-version>v" + escapeHtml(plugin.version || "0.0.0") + "</div>" +
+      "</div>" +
+      "<div class=\"plugin-status " + (plugin.enabled ? "enabled" : "") + "\">" + (plugin.enabled ? "已启用" : "未启用") + "</div>" +
+    "</div>" +
+    "<div class=plugin-desc>" + escapeHtml(plugin.description || "无描述") + "</div>" +
+    "<div class=plugin-meta>已配对设备: <strong>" + pairedCount + "</strong></div>" +
+    "<div class=plugin-actions></div>";
+
+  var actions = card.querySelector(".plugin-actions");
+  var toggle = document.createElement("button");
+  toggle.className = plugin.enabled ? "btn-secondary" : "btn-primary";
+  toggle.type = "button";
+  toggle.textContent = plugin.enabled ? "禁用" : "启用";
+  toggle.addEventListener("click", function() {
+    togglePlugin(plugin.name, !plugin.enabled);
+  });
+  actions.appendChild(toggle);
+
+  if (plugin.name === "LAN 设备监控" && plugin.enabled) {
+    var scan = document.createElement("button");
+    scan.className = "btn-secondary";
+    scan.type = "button";
+    scan.textContent = "扫描局域网设备";
+    scan.addEventListener("click", scanLanDevices);
+    actions.appendChild(scan);
+  }
+
+  return card;
+}
+
+async function togglePlugin(name, enable) {
+  try {
+    var action = enable ? "enable" : "disable";
+    var resp = await fetch(apiUrl("/api/plugins/" + encodeURIComponent(name) + "/" + action), {
+      method: "POST",
+    });
+    if (!resp.ok) throw new Error("HTTP " + resp.status);
+    showToast(enable ? "插件已启用" : "插件已禁用", "success");
+    await loadPlugins();
+  } catch (e) {
+    showToast("插件操作失败: " + e.message, "error");
+  }
+}
+
+async function scanLanDevices() {
+  try {
+    showToast("正在扫描局域网设备...", "info");
+    var resp = await fetch(apiUrl("/api/lan/discover?timeout=3"), { method: "POST" });
+    if (!resp.ok) throw new Error("HTTP " + resp.status);
+    var result = await resp.json();
+    var devices = result.devices || [];
+    showToast("发现 " + devices.length + " 台设备", devices.length ? "success" : "info");
+  } catch (e) {
+    showToast("扫描失败: " + e.message, "error");
+  }
 }
 
 // --- Load devices on tab click ---
@@ -2699,12 +2997,17 @@ function initPhase45() {
 
   // Theme Engine + Marketplace (M4.1 / M6.5)
   ThemeEngine.init();
+  initThemeTools();
   initThemeSelector();
   initMarketplaceOnTab();
   initMarketplaceOverlayButtons();
   var hardwareTab = document.querySelector("[data-tab=hardware]");
   if (hardwareTab) {
     hardwareTab.addEventListener('click', function() { setTimeout(loadDevices, 100); });
+  }
+  var pluginsTab = document.querySelector("[data-tab=plugins]");
+  if (pluginsTab) {
+    pluginsTab.addEventListener('click', function() { setTimeout(loadPlugins, 100); });
   }
   if (!document.getElementById("toast-container")) {
     var tc = document.createElement("div");

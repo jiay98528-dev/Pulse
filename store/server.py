@@ -10,28 +10,55 @@ import aiosqlite
 
 DB_PATH = Path(__file__).parent / "store.db"
 
-# ── 模拟支付配置 ──────────────────────────────────────────
-# 开发环境: 15 秒后自动标记已支付
-SIMULATED_PAYMENT_DELAY = 15
-# 生产环境: 替换为真实微信/支付宝 SDK 和回调验证
-WECHAT_MCH_ID = ""  # 微信商户号
-ALIPAY_APP_ID = ""  # 支付宝应用ID
-PAYMENT_SIGN_KEY = "dev-secret-key-change-in-production"
+
+def _env_bool(name: str, default: bool = False) -> bool:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+STORE_HOST = os.getenv("PULSE_STORE_HOST", "127.0.0.1")
+STORE_PORT = int(os.getenv("PULSE_STORE_PORT", "8081"))
+STORE_ALLOWED_ORIGINS = [
+    origin.strip()
+    for origin in os.getenv(
+        "PULSE_STORE_ALLOWED_ORIGINS",
+        "http://127.0.0.1:8080,http://localhost:8080,"
+        "http://tauri.localhost,https://tauri.localhost,tauri://localhost",
+    ).split(",")
+    if origin.strip()
+]
+
+# ── 支付/恢复配置 ──────────────────────────────────────────
+SIMULATED_PAYMENTS = _env_bool("PULSE_STORE_SIMULATED_PAYMENTS", False)
+SIMULATED_PAYMENT_DELAY = int(os.getenv("PULSE_STORE_SIMULATED_PAYMENT_DELAY", "15"))
+DEBUG_RESTORE_CODES = _env_bool("PULSE_STORE_DEBUG_RESTORE_CODES", False)
+WECHAT_MCH_ID = os.getenv("PULSE_STORE_WECHAT_MCH_ID", "")
+ALIPAY_APP_ID = os.getenv("PULSE_STORE_ALIPAY_APP_ID", "")
+PAYMENT_SIGN_KEY = os.getenv("PULSE_STORE_PAYMENT_SIGN_KEY", "")
 
 
 @asynccontextmanager
 async def lifespan(app):
+    payment_task = None
     await init_db()
     await seed_themes()
-    # 启动后台任务: 模拟支付完成
-    asyncio.create_task(simulate_payment_loop())
+    if SIMULATED_PAYMENTS:
+        payment_task = asyncio.create_task(simulate_payment_loop())
     yield
+    if payment_task:
+        payment_task.cancel()
+        try:
+            await payment_task
+        except asyncio.CancelledError:
+            pass
 
 
 app = FastAPI(title="Pulse 主题商店", version="1.0.0", lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=STORE_ALLOWED_ORIGINS,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -42,7 +69,8 @@ app.add_middleware(
 
 class BuyRequest(BaseModel):
     email: str
-    payment_method: str  # "wechat" | "alipay"
+    payment_method: str = ""  # "wechat" | "alipay"
+    payment: str = ""
 
 
 class RestoreRequest(BaseModel):
@@ -155,7 +183,9 @@ async def simulate_payment_loop():
 
 
 def generate_qr_code_url(purchase_id: int, method: str) -> str:
-    """生成模拟 QR 码 URL (真实环境替换为微信/支付宝 SDK 返回的二维码链接)"""
+    """生成模拟 QR 码 URL。仅在显式开启模拟支付时可用。"""
+    if not SIMULATED_PAYMENTS:
+        raise HTTPException(503, "支付服务未配置")
     if method == "wechat":
         return f"https://pay.weixin.qq.com/qr/fake?purchase_id={purchase_id}"
     elif method == "alipay":
@@ -170,8 +200,10 @@ def generate_verification_code() -> str:
 
 def compute_sign(purchase_id: int, transaction_id: str, amount: float) -> str:
     """计算支付回调签名"""
+    if not PAYMENT_SIGN_KEY:
+        raise HTTPException(503, "支付回调签名密钥未配置")
     raw = f"{purchase_id}:{transaction_id}:{amount}:{PAYMENT_SIGN_KEY}"
-    return hashlib.sha256(raw.encode()).hexdigest()
+    return hmac.new(PAYMENT_SIGN_KEY.encode(), raw.encode(), hashlib.sha256).hexdigest()
 
 
 # ── Theme CRUD ────────────────────────────────────────────
@@ -208,9 +240,10 @@ async def get_theme(theme_id: int):
 
 @app.post("/v1/themes/{theme_id}/buy")
 async def buy_theme(theme_id: int, req: BuyRequest):
-    """创建购买订单, 返回模拟支付二维码"""
+    """创建购买订单。默认发行配置下，付费主题需先配置真实或模拟支付。"""
+    payment_method = req.payment_method or req.payment
     # 验证支付方式
-    if req.payment_method not in ("wechat", "alipay"):
+    if payment_method not in ("wechat", "alipay"):
         raise HTTPException(400, "payment_method 必须是 wechat 或 alipay")
 
     # 验证主题存在
@@ -222,6 +255,8 @@ async def buy_theme(theme_id: int, req: BuyRequest):
             raise HTTPException(404, "主题不存在")
         if theme["price"] <= 0:
             raise HTTPException(400, "免费主题无需购买")
+        if not SIMULATED_PAYMENTS and not (WECHAT_MCH_ID or ALIPAY_APP_ID):
+            raise HTTPException(503, "支付服务未配置")
 
         # 检查是否已购买过
         cursor = await db.execute(
@@ -241,7 +276,7 @@ async def buy_theme(theme_id: int, req: BuyRequest):
                 req.email,
                 theme_id,
                 theme["price"],
-                req.payment_method,
+                payment_method,
                 "",
                 expires_at,
             ),
@@ -249,7 +284,7 @@ async def buy_theme(theme_id: int, req: BuyRequest):
         purchase_id = cursor.lastrowid
 
         # 生成 QR 码 URL
-        qr_url = generate_qr_code_url(purchase_id, req.payment_method)
+        qr_url = generate_qr_code_url(purchase_id, payment_method)
         await db.execute(
             "UPDATE purchases SET qr_code_url=? WHERE id=?",
             (qr_url, purchase_id),
@@ -261,7 +296,7 @@ async def buy_theme(theme_id: int, req: BuyRequest):
         "qr_code_url": qr_url,
         "expires_at": expires_at,
         "amount": theme["price"],
-        "payment_method": req.payment_method,
+        "payment_method": payment_method,
     }
 
 
@@ -305,10 +340,10 @@ async def payment_webhook(payload: WebhookPayload, request: Request):
     """
     async with aiosqlite.connect(DB_PATH) as db:
         # 验证签名
-        expected_sign = compute_sign(
-            payload.purchase_id, payload.transaction_id, payload.amount
-        )
-        if payload.sign and payload.sign != expected_sign:
+        if not payload.sign:
+            raise HTTPException(400, "缺少签名")
+        expected_sign = compute_sign(payload.purchase_id, payload.transaction_id, payload.amount)
+        if not hmac.compare_digest(payload.sign, expected_sign):
             raise HTTPException(400, "签名验证失败")
 
         # 更新 purchase 状态
@@ -348,10 +383,12 @@ async def payment_webhook(payload: WebhookPayload, request: Request):
 
 @app.post("/v1/restore")
 async def send_verification_code(req: RestoreRequest):
-    """发送邮箱验证码 (开发环境: 直接返回验证码)"""
+    """发送邮箱验证码。调试回显必须通过环境变量显式开启。"""
     email = req.email.strip().lower()
     if not email:
         raise HTTPException(400, "邮箱不能为空")
+    if not DEBUG_RESTORE_CODES:
+        raise HTTPException(503, "邮箱发送服务未配置")
 
     code = generate_verification_code()
     expires_at = (datetime.utcnow() + timedelta(minutes=3)).isoformat()
@@ -369,15 +406,13 @@ async def send_verification_code(req: RestoreRequest):
         )
         await db.commit()
 
-    # 开发环境: 直接返回验证码 (生产环境替换为 SMTP 发送)
     print(f"[Store] 验证码已发送到 {email}: {code}")
 
-    return {
+    response = {
         "ok": True,
         "message": "验证码已发送",
-        # ⚠️ 开发环境直接返回验证码, 生产环境需移除
-        "debug_code": code,
     }
+    return response
 
 
 @app.post("/v1/restore/verify")
@@ -423,10 +458,24 @@ async def verify_code(req: RestoreVerifyRequest):
         purchases = [dict(r) for r in await cursor.fetchall()]
         await db.commit()
 
+    themes = []
+    for item in purchases:
+        themes.append({
+            "id": item["theme_id"],
+            "name": item["theme_name"],
+            "version": item["version"],
+            "author": item["author"],
+            "download_url": item["download_url"],
+            "preview_url": item["preview_url"],
+            "purchase_id": item["purchase_id"],
+            "purchased_at": item["purchased_at"],
+        })
+
     return {
         "ok": True,
         "email": email,
         "purchases": purchases,
+        "themes": themes,
     }
 
 
@@ -468,5 +517,5 @@ async def seed_themes():
 if __name__ == "__main__":
     import uvicorn
 
-    print("[Store] Starting on http://0.0.0.0:8081")
-    uvicorn.run(app, host="0.0.0.0", port=8081)
+    print(f"[Store] Starting on http://{STORE_HOST}:{STORE_PORT}")
+    uvicorn.run(app, host=STORE_HOST, port=STORE_PORT)

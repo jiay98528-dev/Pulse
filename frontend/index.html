@@ -7,7 +7,7 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Tektur:wght@400;700;900&family=Bebas+Neue&family=Montserrat:wght@400;700&family=JetBrains+Mono:wght@400;700&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="css/style.css">
+    <link rel="stylesheet" href="css/style.css?v=2.0.8">
 </head>
 <body>
     <!-- ═══ CUSTOM TITLE BAR ═══ -->
@@ -184,6 +184,45 @@
 
         <!-- ─── TAB: ANALYSIS ─── -->
         <section class="tab-content" id="tab-analysis">
+            <div class="analysis-kpi-row">
+                <div class="analysis-kpi">
+                    <span>总 Token</span>
+                    <strong id="analysisTotalTokens">—</strong>
+                </div>
+                <div class="analysis-kpi">
+                    <span>总费用</span>
+                    <strong id="analysisTotalCost">—</strong>
+                </div>
+                <div class="analysis-kpi">
+                    <span>缓存命中率</span>
+                    <strong id="analysisCacheRate">—</strong>
+                </div>
+                <div class="analysis-kpi">
+                    <span>主要模型</span>
+                    <strong id="analysisTopModel">—</strong>
+                </div>
+            </div>
+
+            <div class="analysis-filters">
+                <label>时间范围
+                    <select id="analysisRangeDays" class="form-input">
+                        <option value="7">7天</option>
+                        <option value="30" selected>30天</option>
+                        <option value="90">90天</option>
+                        <option value="365">365天</option>
+                    </select>
+                </label>
+                <label>模型
+                    <select id="analysisModelFilter" class="form-input">
+                        <option value="">全部模型</option>
+                    </select>
+                </label>
+                <label class="inline-check">
+                    <input type="checkbox" id="analysisCompareMode"> 对比模式
+                </label>
+                <button class="btn-secondary" id="analysisRefreshBtn">刷新</button>
+            </div>
+
             <div class="history-grid">
                 <div class="card chart-wide">
                     <div class="card-header">Token 历史趋势 (30日)</div>
@@ -195,9 +234,9 @@
                     <div class="card-header">CSV 数据导入</div>
                     <div class="csv-upload-area" id="csvDropZone">
                         <div class="csv-icon">↑</div>
-                        <p class="csv-text">拖拽 CSV 文件到此处</p>
+                        <p class="csv-text">拖拽 CSV / ZIP 到此处</p>
                         <p class="csv-sub">或点击选择文件</p>
-                        <input type="file" id="csvFileInput" accept=".csv" hidden>
+                        <input type="file" id="csvFileInput" accept=".csv,.zip" hidden>
                         <button class="csv-btn" id="csvSelectBtn">选择文件</button>
                     </div>
                     <div class="csv-preview hidden" id="csvPreview">
@@ -205,8 +244,49 @@
                         <button class="csv-btn primary" id="csvImportBtn">确认导入</button>
                     </div>
                     <div class="csv-format-note">
-                        <p>支持的列名: timestamp, model, input_tokens, output_tokens, cached_tokens, total_tokens, cost</p>
+                        <p>支持 CSV 或 Deepseek 导出 ZIP。列名: timestamp, model, input_tokens, output_tokens, cached_tokens, total_tokens, cost</p>
                     </div>
+                </div>
+            </div>
+            <div class="analysis-chart-grid">
+                <div class="card">
+                    <div class="card-header">模型分布</div>
+                    <div class="chart-container">
+                        <canvas id="modelBreakdownChart"></canvas>
+                    </div>
+                </div>
+                <div class="card">
+                    <div class="card-header">缓存命中率</div>
+                    <div class="chart-container">
+                        <canvas id="cacheRateChart"></canvas>
+                    </div>
+                </div>
+                <div class="card chart-wide">
+                    <div class="card-header">费用趋势</div>
+                    <div class="chart-container">
+                        <canvas id="costTrendChart"></canvas>
+                    </div>
+                </div>
+            </div>
+            <div class="card analysis-table-card">
+                <div class="card-header">导入数据明细</div>
+                <div class="analysis-table-wrap">
+                    <table class="analysis-table">
+                        <thead>
+                            <tr>
+                                <th>日期</th>
+                                <th>模型</th>
+                                <th>输入</th>
+                                <th>输出</th>
+                                <th>缓存</th>
+                                <th>总 Token</th>
+                                <th>费用</th>
+                            </tr>
+                        </thead>
+                        <tbody id="analysisTableBody">
+                            <tr><td colspan="7">暂无导入数据</td></tr>
+                        </tbody>
+                    </table>
                 </div>
             </div>
         </section>
@@ -215,8 +295,15 @@
         <section id="tab-settings" class="tab-content">
             <div class="tab-header"><h2>配置</h2></div>
             <div class="settings-card">
-                <h3>Deepseek API</h3>
+                <h3>AI 供应商</h3>
                 <form id="settings-form">
+                    <label>Provider
+                        <select id="settings-provider" class="form-input">
+                            <option value="deepseek">Deepseek</option>
+                            <option value="openai">OpenAI</option>
+                            <option value="anthropic">Anthropic</option>
+                        </select>
+                    </label>
                     <label>API Key <input type="password" id="settings-api-key" placeholder="sk-..."></label>
                     <label>Base URL <input type="text" id="settings-base-url" value="https://api.deepseek.com"></label>
                     <label>Daily Limit ($) <input type="number" id="settings-daily-limit" step="0.1"></label>
@@ -240,6 +327,34 @@
                 <p style="color:var(--color-grey-50);font-size:12px;margin-top:8px;">
                     从下方主题市场安装更多主题。
                 </p>
+                <div class="theme-import-area" id="themeDropZone">
+                    <span>拖入 .pulse-theme</span>
+                    <button type="button" class="btn-secondary" id="themeImportBtn">选择文件</button>
+                    <input type="file" id="themeFileInput" accept=".pulse-theme,application/json" hidden>
+                </div>
+                <div class="theme-editor" id="themeEditor">
+                    <h4>主题编辑器</h4>
+                    <div class="theme-editor-grid">
+                        <label>RED <input type="color" id="theme-color-red" value="#CC0000"></label>
+                        <label>BLACK <input type="color" id="theme-color-black" value="#000000"></label>
+                        <label>WHITE <input type="color" id="theme-color-white" value="#FFFFFF"></label>
+                        <label>GREY 10 <input type="color" id="theme-color-grey-10" value="#1A1A1A"></label>
+                        <label>GREY 30 <input type="color" id="theme-color-grey-30" value="#4D4D4D"></label>
+                        <label>GREY 50 <input type="color" id="theme-color-grey-50" value="#808080"></label>
+                        <label>YELLOW <input type="color" id="theme-color-yellow" value="#FFD700"></label>
+                        <label>GREEN <input type="color" id="theme-color-green" value="#2D8A2D"></label>
+                        <label>DISPLAY FONT <input type="text" id="theme-font-display" value="'Tektur', 'Bebas Neue', 'Impact', sans-serif"></label>
+                        <label>BODY FONT <input type="text" id="theme-font-body" value="'Montserrat', 'Inter', sans-serif"></label>
+                        <label>MONO FONT <input type="text" id="theme-font-mono" value="'JetBrains Mono', 'Fira Code', monospace"></label>
+                        <label>BASE SIZE <input type="range" id="theme-text-base" min="14" max="20" value="16"></label>
+                        <label>HEADING SIZE <input type="range" id="theme-text-lg" min="18" max="28" value="20"></label>
+                        <label>KPI SIZE <input type="range" id="theme-text-4xl" min="48" max="72" value="56"></label>
+                    </div>
+                    <div class="form-actions">
+                        <button type="button" class="btn-secondary" id="themeResetBtn">恢复默认</button>
+                        <button type="button" class="btn-primary" id="themeExportBtn">导出 .pulse-theme</button>
+                    </div>
+                </div>
             </div>
 
             <!-- ─── MARKETPLACE CARD (M4.4 / M6.5) ─── -->
@@ -273,9 +388,10 @@
         <section class="tab-content" id="tab-plugins">
             <div class="card">
                 <div class="card-header red">插件管理</div>
-                <div class="empty-state">
-                    <div class="icon">🔌</div>
-                    <div class="text">插件系统即将推出 · 敬请期待</div>
+                <div id="plugin-list" class="plugin-grid"></div>
+                <div id="plugin-empty" class="empty-state hidden">
+                    <div class="icon">PLUGINS</div>
+                    <div class="text">未发现可用插件</div>
                 </div>
             </div>
         </section>
@@ -284,7 +400,7 @@
 
     <!-- ═══ SCRIPTS ═══ -->
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
-    <script src="js/app.js"></script>
+    <script src="js/app.js?v=2.0.8"></script>
     <!-- ═══ SETUP OVERLAY ═══ -->
     <div id="setup-overlay" class="overlay">
         <div class="overlay-content setup-wizard">
@@ -377,6 +493,37 @@
             <div class="form-actions">
                 <button class="btn-secondary" id="restore-close-btn">关闭</button>
             </div>
+        </div>
+    </div>
+
+    <!-- ═══ DEVICE FORM OVERLAY ═══ -->
+    <div id="device-form-overlay" class="overlay hidden">
+        <div class="overlay-content">
+            <h3>添加 LAN/WMI 设备</h3>
+            <form id="device-form">
+                <label>设备名称
+                    <input type="text" id="device-name" class="form-input" required placeholder="DESKTOP">
+                </label>
+                <label>主机 / IP
+                    <input type="text" id="device-host" class="form-input" required placeholder="192.168.1.10">
+                </label>
+                <label>用户名
+                    <input type="text" id="device-username" class="form-input" placeholder="可选">
+                </label>
+                <label>密码
+                    <input type="password" id="device-password" class="form-input" placeholder="可选">
+                </label>
+                <label>端口
+                    <input type="number" id="device-port" class="form-input" value="135" min="1" max="65535">
+                </label>
+                <label class="inline-check">
+                    <input type="checkbox" id="device-enabled" checked> 启用监控
+                </label>
+                <div class="form-actions">
+                    <button type="button" class="btn-secondary" id="device-form-cancel">取消</button>
+                    <button type="submit" class="btn-primary">保存设备</button>
+                </div>
+            </form>
         </div>
     </div>
 

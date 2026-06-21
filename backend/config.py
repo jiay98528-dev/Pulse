@@ -1,10 +1,12 @@
 """Pulse configuration loader."""
+import copy
 import json
 import os
 from pathlib import Path
 
 CONFIG_PATH = Path(__file__).parent / "config.json"
 DEFAULT_CONFIG = {
+    "ai_provider": "deepseek",
     "deepseek_api_key": "",
     "deepseek_base_url": "https://api.deepseek.com",
     "openai_api_key": "",
@@ -20,6 +22,7 @@ DEFAULT_CONFIG = {
         "password": ""
     },
     "websocket_port": 8765,
+    "http_host": "127.0.0.1",
     "http_port": 8080
 }
 
@@ -28,17 +31,17 @@ def load_config() -> dict:
     """Load config from JSON file, creating default if missing."""
     if not CONFIG_PATH.exists():
         save_config(DEFAULT_CONFIG)
-        return DEFAULT_CONFIG.copy()
+        return copy.deepcopy(DEFAULT_CONFIG)
 
     try:
         with open(CONFIG_PATH, "r", encoding="utf-8") as f:
             cfg = json.load(f)
             # Merge with defaults to fill missing keys
-            merged = DEFAULT_CONFIG.copy()
+            merged = copy.deepcopy(DEFAULT_CONFIG)
             merged.update(cfg)
             return merged
     except (json.JSONDecodeError, IOError):
-        return DEFAULT_CONFIG.copy()
+        return copy.deepcopy(DEFAULT_CONFIG)
 
 
 def save_config(cfg: dict) -> bool:
@@ -52,7 +55,8 @@ def save_config(cfg: dict) -> bool:
 
 
 def is_configured() -> bool:
-    """Check if Deepseek API key is configured."""
+    """Check if the selected AI provider has an API key configured."""
     cfg = load_config()
-    key = cfg.get("deepseek_api_key", "")
+    provider = cfg.get("ai_provider", "deepseek")
+    key = cfg.get(f"{provider}_api_key", "")
     return bool(key and key.strip())
