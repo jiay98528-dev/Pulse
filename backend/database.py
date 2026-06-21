@@ -33,6 +33,14 @@ async def init_db():
             )
         """)
         await db.execute("""
+            CREATE TABLE IF NOT EXISTS spending_limits (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                type TEXT NOT NULL,
+                limit_amount REAL NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+        """)
+        await db.execute("""
             CREATE TABLE IF NOT EXISTS csv_imports (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 filename TEXT NOT NULL,
@@ -83,10 +91,6 @@ async def init_db():
         await db.execute("""
             CREATE INDEX IF NOT EXISTS idx_usage_model
             ON deepseek_usage(model)
-        """)
-        await db.execute("""
-            CREATE INDEX IF NOT EXISTS idx_lan_paired_ip
-            ON lan_paired_devices(ip)
         """)
         await db.commit()
 
@@ -238,7 +242,6 @@ async def init_devices_table():
                 name TEXT NOT NULL,
                 host TEXT NOT NULL,
                 username TEXT DEFAULT '',
-                -- NOTE: stored in plaintext, production should encrypt
                 password TEXT DEFAULT '',
                 port INTEGER DEFAULT 135,
                 enabled INTEGER DEFAULT 1,

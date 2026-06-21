@@ -529,15 +529,19 @@
 
     <!-- ═══ PAIR OVERLAY ═══ -->
     <div id="pair-overlay" class="overlay hidden">
-        <div class="overlay-content">
-            <h3>配对请求</h3>
-            <p id="pair-request-info"></p>
-            <label><input type="checkbox" id="pair-persistent"> 持久信任</label>
-            <div id="pair-pin-group">
-                <label>输入PIN <input type="password" id="pair-pin-input"></label>
+        <div class="overlay-content" style="min-width:380px;">
+            <h3>L A N  配对请求</h3>
+            <p id="pair-request-info" style="margin:16px 0;color:var(--color-grey-70);">设备请求监控本机</p>
+            <label style="display:flex;align-items:center;gap:8px;margin-bottom:12px;">
+                <input type="checkbox" id="pair-persistent"> 持久信任
+            </label>
+            <div id="pair-pin-group" class="hidden" style="margin-bottom:16px;">
+                <label>输入 PIN <input type="password" id="pair-pin-input" class="form-input" placeholder="至少4位数字"></label>
             </div>
-            <button class="btn-primary" id="pair-approve-btn">允许</button>
-            <button class="btn-secondary" id="pair-reject-btn">拒绝</button>
+            <div class="form-actions">
+                <button class="btn-primary" id="pair-approve-btn">允许</button>
+                <button class="btn-secondary" id="pair-reject-btn">拒绝</button>
+            </div>
         </div>
     </div>
 

@@ -56,10 +56,8 @@ class DeepseekCollector:
                             "topped_up_balance": topped_up_balance,
                             "currency": currency
                         }
-                    print(f"[Deepseek] API error: status={resp.status}")
                     return None
-        except Exception as e:
-            print(f"[Deepseek] Request error: {e}")
+        except Exception:
             return None
 
     async def fetch_all(self) -> dict:
