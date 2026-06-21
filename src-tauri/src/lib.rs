@@ -1,8 +1,12 @@
 use std::path::PathBuf;
 use std::process::{Child, Command};
 use std::sync::Mutex;
+
+#[cfg(target_os = "windows")]
+use std::os::windows::process::CommandExt;
+
 use tauri::{
-    Manager,
+    AppHandle, Manager, WindowEvent,
     menu::{MenuBuilder, MenuItemBuilder},
     tray::{MouseButton, TrayIconBuilder, TrayIconEvent},
 };
@@ -90,18 +94,50 @@ fn spawn_backend(app: &tauri::App) {
     }
 }
 
+fn cleanup_backend(app: &AppHandle) {
+    if let Some(state) = app.try_state::<BackendProcess>() {
+        if let Ok(mut guard) = state.0.lock() {
+            if let Some(mut child) = guard.take() {
+                // Kill entire process tree on Windows so python.exe isn't orphaned
+                #[cfg(target_os = "windows")]
+                {
+                    let pid = child.id();
+                    let _ = Command::new("taskkill")
+                        .args(["/F", "/T", "/PID", &pid.to_string()])
+                        .creation_flags(0x08000000)
+                        .spawn();
+                }
+                let _ = child.kill();
+                let _ = child.wait();
+                println!("[Pulse] Backend process terminated");
+            }
+        }
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
+    let app = tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
-        .plugin(tauri_plugin_autostart::init())
-        .plugin(tauri_plugin_updater::init())
+        .plugin(tauri_plugin_autostart::init(
+            tauri_plugin_autostart::MacosLauncher::LaunchAgent,
+            Some(vec!["--minimized"]),
+        ))
         .setup(|app| {
+            let window = app.get_webview_window("main").unwrap();
+
             #[cfg(debug_assertions)]
             {
-                let window = app.get_webview_window("main").unwrap();
                 window.open_devtools();
             }
+
+            let close_window = window.clone();
+            window.on_window_event(move |event| {
+                if let WindowEvent::CloseRequested { api, .. } = event {
+                    let _ = close_window.hide();
+                    api.prevent_close();
+                }
+            });
 
             spawn_backend(app);
 
@@ -115,8 +151,7 @@ pub fn run() {
                 .item(&quit)
                 .build()?;
 
-            let icon = tauri::image::Image::from_bytes(include_bytes!("../icons/icon.png"))
-                .expect("Tray icon missing — place a 32x32 PNG at src-tauri/icons/icon.png");
+            let icon = tauri::image::Image::new(include_bytes!("../icons/icon.rgba"), 32, 32);
 
             TrayIconBuilder::new()
                 .icon(icon)
@@ -135,6 +170,15 @@ pub fn run() {
                             if let Some(state) = app.try_state::<BackendProcess>() {
                                 if let Ok(mut guard) = state.0.lock() {
                                     if let Some(mut child) = guard.take() {
+                                        // Kill entire process tree on Windows so python.exe isn't orphaned
+                                        #[cfg(target_os = "windows")]
+                                        {
+                                            let pid = child.id();
+                                            let _ = Command::new("taskkill")
+                                                .args(["/F", "/T", "/PID", &pid.to_string()])
+                                                .creation_flags(0x08000000)
+                                                .spawn();
+                                        }
                                         let _ = child.kill();
                                         let _ = child.wait();
                                     }
@@ -148,11 +192,10 @@ pub fn run() {
                 .on_tray_icon_event(|tray, event| {
                     if let TrayIconEvent::Click { button, .. } = event {
                         if button == MouseButton::Left {
-                            if let Some(app) = tray.app_handle() {
-                                if let Some(window) = app.get_webview_window("main") {
-                                    let _ = window.show();
-                                    let _ = window.set_focus();
-                                }
+                            let app = tray.app_handle();
+                            if let Some(window) = app.get_webview_window("main") {
+                                let _ = window.show();
+                                let _ = window.set_focus();
                             }
                         }
                     }
@@ -161,46 +204,12 @@ pub fn run() {
 
             Ok(())
         })
-        .on_event(|app_handle, event| {
-            match event {
-                tauri::RunEvent::CloseRequested { api, .. } => {
-                    // Hide window to tray instead of closing
-                    if let Some(window) = app_handle.get_webview_window("main") {
-                        let _ = window.hide();
-                    }
-                    api.prevent_close();
-                }
-                tauri::RunEvent::Exit => {
-                    if let Some(state) = app_handle.try_state::<BackendProcess>() {
-                        if let Ok(mut guard) = state.0.lock() {
-                            // Take the child out so it is killed only once
-                            if let Some(mut child) = guard.take() {
-                                let _ = child.kill();
-                                let _ = child.wait();
-                                println!("[Pulse] Backend process terminated");
-                            }
-                        }
-                    }
-                }
-                _ => {}
-            }
-        })
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
-}
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application");
 
-/// Open a URL in the system default browser.
-fn open_url(url: &str) {
-    #[cfg(target_os = "windows")]
-    {
-        let _ = Command::new("cmd").args(["/c", "start", url]).spawn();
-    }
-    #[cfg(target_os = "macos")]
-    {
-        let _ = Command::new("open").arg(url).spawn();
-    }
-    #[cfg(target_os = "linux")]
-    {
-        let _ = Command::new("xdg-open").arg(url).spawn();
-    }
+    app.run(|app_handle, event| {
+        if let tauri::RunEvent::Exit = event {
+            cleanup_backend(app_handle);
+        }
+    });
 }
