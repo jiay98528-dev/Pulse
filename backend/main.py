@@ -356,9 +356,9 @@ async def api_health():
 
 
 CSV_COLUMN_MAP = {
-    "timestamp": ["timestamp", "date", "time", "created_at", "datetime", "日期", "时间"],
+    "timestamp": ["timestamp", "date", "utc_date", "time", "created_at", "datetime", "日期", "时间"],
     "model": ["model", "model_id", "model_name", "engine", "模型"],
-    "input_tokens": ["input_tokens", "prompt_tokens", "input", "prompt", "输入token", "输入 tokens"],
+    "input_tokens": ["input_tokens", "prompt_tokens", "input", "prompt", "输入token", "输入 tokens", "amount"],
     "output_tokens": ["output_tokens", "completion_tokens", "output", "completion", "输出token", "输出 tokens"],
     "cached_tokens": ["cached_tokens", "cached_input_tokens", "cache_hit", "cached", "缓存token", "缓存 tokens"],
     "total_tokens": ["total_tokens", "total", "tokens", "token_count", "总token", "总 tokens"],
@@ -388,7 +388,9 @@ def _records_from_dataframe(df: pd.DataFrame) -> tuple[list[dict], set[str], set
                 break
 
     if "total_tokens" not in mapped and "input_tokens" not in mapped:
-        raise HTTPException(400, "CSV must contain at least token columns (total_tokens or input_tokens)")
+        if not ("cost" in mapped and "timestamp" in mapped):
+            raise HTTPException(400, "CSV must contain at least token columns (total_tokens or input_tokens)")
+        # Deepseek cost-only CSV: accept with 0 tokens
 
     records = []
     now = datetime.now(timezone.utc).isoformat()
@@ -417,6 +419,79 @@ def _records_from_dataframe(df: pd.DataFrame) -> tuple[list[dict], set[str], set
     return records, set(mapped.keys()), set(CSV_COLUMN_MAP.keys()) - set(mapped.keys())
 
 
+def _pivot_deepseek_amount_df(df: pd.DataFrame) -> pd.DataFrame:
+    """Detect and pivot Deepseek amount CSV (long format: type+amount columns).
+    Returns the original df if not the Deepseek format."""
+    # Check if this is a Deepseek amount CSV: has 'type' column with known values
+    cols_lower = {c.strip().lower() for c in df.columns}
+    if 'type' not in cols_lower:
+        return df
+    type_col = [c for c in df.columns if c.strip().lower() == 'type'][0]
+    type_vals = set(df[type_col].dropna().unique())
+    known_types = {'input_cache_hit_tokens', 'input_cache_miss_tokens', 'output_tokens', 'total_tokens', 'request_count'}
+    if not (type_vals & known_types):
+        return df  # Not a Deepseek amount CSV
+
+    # Pivot: group by (utc_date/date, model), pivot type->amount
+    date_col = None
+    for candidate in ['utc_date', 'date', 'timestamp']:
+        for col in df.columns:
+            if col.strip().lower() == candidate:
+                date_col = col
+                break
+        if date_col:
+            break
+    model_col = None
+    for candidate in ['model', 'model_name']:
+        for col in df.columns:
+            if col.strip().lower() == candidate:
+                model_col = col
+                break
+        if model_col:
+            break
+    amount_col = None
+    for candidate in ['amount']:
+        for col in df.columns:
+            if col.strip().lower() == candidate:
+                amount_col = col
+                break
+        if amount_col:
+            break
+
+    if not date_col or not model_col or not amount_col:
+        return df
+
+    # Pivot: aggregate by date+model+type
+    grouped = df.groupby([date_col, model_col, type_col])[amount_col].sum().unstack(fill_value=0)
+    grouped = grouped.reset_index()
+    grouped.columns = [str(c).strip() for c in grouped.columns]
+
+    # Rename to our standard columns
+    rename_map = {}
+    for col in grouped.columns:
+        cl = col.lower().replace(' ', '_')
+        if 'cache_hit' in cl or 'cached_hit' in cl:
+            rename_map[col] = 'cached_tokens'
+        elif 'cache_miss' in cl:
+            rename_map[col] = 'input_tokens'
+        elif 'output_tokens' in cl and 'total' not in cl:
+            rename_map[col] = 'output_tokens'
+        elif cl == 'total_tokens':
+            rename_map[col] = 'total_tokens'
+    grouped.rename(columns=rename_map, inplace=True)
+
+    # Ensure total_tokens = sum of all types
+    token_cols = [c for c in grouped.columns if c not in (date_col, model_col, 'request_count')]
+    if 'total_tokens' not in grouped.columns and token_cols:
+        grouped['total_tokens'] = grouped[token_cols].sum(axis=1)
+
+    # Rename date/model to standard names
+    date_rename = {date_col: 'timestamp', model_col: 'model'}
+    grouped.rename(columns=date_rename, inplace=True)
+
+    return grouped
+
+
 MAX_CSV_SIZE = 50 * 1024 * 1024  # 50MB
 _csv_import_semaphore = asyncio.Semaphore(3)
 
@@ -441,6 +516,7 @@ async def api_csv_import(file: UploadFile = File(...)):
 
             if suffix == ".csv":
                 df = pd.read_csv(io.BytesIO(content))
+                df = _pivot_deepseek_amount_df(df)
                 parsed, file_matched, file_unmatched = _records_from_dataframe(df)
                 records.extend(parsed)
                 matched.update(file_matched)
@@ -454,6 +530,7 @@ async def api_csv_import(file: UploadFile = File(...)):
                     for name in csv_names:
                         with zf.open(name) as csv_file:
                             df = pd.read_csv(csv_file)
+                            df = _pivot_deepseek_amount_df(df)
                         parsed, file_matched, file_unmatched = _records_from_dataframe(df)
                         records.extend(parsed)
                         matched.update(file_matched)
