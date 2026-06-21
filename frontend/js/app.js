@@ -859,6 +859,18 @@ function handleMessage(msg) {
         case 'deepseek':
             updateDeepseekData(msg.data);
             WidgetEngine.updateAll('deepseek', msg.data);
+            // Cost limit alert: KPI turns red when limits exceeded
+            if (msg.data.limits && msg.data.today_cost != null) {
+                var dailyOver = msg.data.today_cost > (msg.data.limits.daily || 999999);
+                var monthlyOver = msg.data.month_cost > (msg.data.limits.monthly || 999999);
+                if (dailyOver || monthlyOver) {
+                    var alertEl = document.getElementById('limitAlert');
+                    if (alertEl) {
+                        alertEl.classList.remove('hidden');
+                        alertEl.textContent = (dailyOver ? '日' : '') + (dailyOver && monthlyOver ? '/' : '') + (monthlyOver ? '月' : '') + '消费限额已超！';
+                    }
+                }
+            }
             if (msg.data.needs_config === true) {
                 WidgetEngine.setVisibility('balance', false);
                 WidgetEngine.setVisibility('tokens', false);

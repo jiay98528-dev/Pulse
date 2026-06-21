@@ -205,12 +205,16 @@ async def collect_deepseek_loop():
                 latest_deepseek_data = result
 
                 limits = get_daily_limit()
+                today_summary = await get_usage_summary(1)
+                month_summary = await get_usage_summary(30)
                 msg_data = {
                     "type": "deepseek",
                     "data": {
                         "balance": result.get("balance"),
                         "timestamp": result.get("timestamp"),
                         "limits": limits,
+                        "today_cost": today_summary.get("total_cost", 0),
+                        "month_cost": month_summary.get("total_cost", 0),
                     }
                 }
                 await broadcast(json.dumps(msg_data, default=str))
