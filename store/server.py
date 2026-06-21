@@ -1,6 +1,6 @@
 """Pulse 主题商店 — 独立 FastAPI 后端 (M6.2 支付 + M6.3 邮箱验证)"""
 import asyncio, json, os, secrets, hashlib, hmac
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException, Request
@@ -146,7 +146,7 @@ async def simulate_payment_loop():
     while True:
         try:
             async with aiosqlite.connect(DB_PATH) as db:
-                now = datetime.utcnow().isoformat()
+                now = datetime.now(timezone.utc).isoformat()
                 cursor = await db.execute(
                     "SELECT id, email, theme_id, amount FROM purchases WHERE status='pending' AND expires_at > ?",
                     (now,),
@@ -160,8 +160,8 @@ async def simulate_payment_loop():
                     )
                     created_row = await created_cursor.fetchone()
                     if created_row:
-                        created_at = datetime.fromisoformat(created_row[0])
-                        if (datetime.utcnow() - created_at).total_seconds() >= SIMULATED_PAYMENT_DELAY:
+                        created_at = datetime.fromisoformat(created_row[0]).replace(tzinfo=timezone.utc)
+                        if (datetime.now(timezone.utc) - created_at).total_seconds() >= SIMULATED_PAYMENT_DELAY:
                             tx_id = f"TX-{pid}-{secrets.token_hex(4).upper()}"
                             await db.execute(
                                 "UPDATE purchases SET status='paid', transaction_id=? WHERE id=? AND status='pending'",
@@ -268,7 +268,7 @@ async def buy_theme(theme_id: int, req: BuyRequest):
             raise HTTPException(409, "该主题已购买过")
 
         # 创建 purchase 记录
-        expires_at = (datetime.utcnow() + timedelta(minutes=30)).isoformat()
+        expires_at = (datetime.now(timezone.utc) + timedelta(minutes=30)).isoformat()
         cursor = await db.execute(
             """INSERT INTO purchases (email, theme_id, amount, status, payment_method, qr_code_url, expires_at)
                VALUES (?, ?, ?, 'pending', ?, ?, ?)""",
@@ -319,7 +319,9 @@ async def get_purchase(purchase_id: int):
         # 检查是否过期
         if result["status"] == "pending":
             expires = datetime.fromisoformat(result["expires_at"])
-            if datetime.utcnow() > expires:
+            if expires.tzinfo is None:
+                expires = expires.replace(tzinfo=timezone.utc)
+            if datetime.now(timezone.utc) > expires:
                 async with aiosqlite.connect(DB_PATH) as db2:
                     await db2.execute(
                         "UPDATE purchases SET status='expired' WHERE id=? AND status='pending'",
@@ -357,22 +359,23 @@ async def payment_webhook(payload: WebhookPayload, request: Request):
         if row[0] == "paid":
             return {"ok": True, "message": "已支付, 无需重复回调"}
 
-        await db.execute(
+        cursor = await db.execute(
             """UPDATE purchases
                SET status='paid', transaction_id=?
                WHERE id=? AND status='pending'""",
             (payload.transaction_id, payload.purchase_id),
         )
-        # 获取 theme_id 更新下载量
-        cursor = await db.execute(
-            "SELECT theme_id FROM purchases WHERE id=?", (payload.purchase_id,)
-        )
-        purchase = await cursor.fetchone()
-        if purchase:
-            await db.execute(
-                "UPDATE themes SET downloads=downloads+1 WHERE id=?",
-                (purchase[0],),
+        # Only increment download counter if the purchase actually transitioned from pending
+        if cursor.rowcount > 0:
+            cursor = await db.execute(
+                "SELECT theme_id FROM purchases WHERE id=?", (payload.purchase_id,)
             )
+            purchase = await cursor.fetchone()
+            if purchase:
+                await db.execute(
+                    "UPDATE themes SET downloads=downloads+1 WHERE id=?",
+                    (purchase[0],),
+                )
         await db.commit()
 
     return {"ok": True, "message": "支付成功"}
@@ -391,7 +394,7 @@ async def send_verification_code(req: RestoreRequest):
         raise HTTPException(503, "邮箱发送服务未配置")
 
     code = generate_verification_code()
-    expires_at = (datetime.utcnow() + timedelta(minutes=3)).isoformat()
+    expires_at = (datetime.now(timezone.utc) + timedelta(minutes=3)).isoformat()
 
     async with aiosqlite.connect(DB_PATH) as db:
         # 将旧验证码标记为已使用
@@ -427,7 +430,7 @@ async def verify_code(req: RestoreVerifyRequest):
         db.row_factory = aiosqlite.Row
 
         # 查找有效验证码
-        now = datetime.utcnow().isoformat()
+        now = datetime.now(timezone.utc).isoformat()
         cursor = await db.execute(
             """SELECT id FROM verification_codes
                WHERE email=? AND code=? AND expires_at>? AND used=0

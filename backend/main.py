@@ -246,6 +246,10 @@ async def broadcast(message: str):
 # ── WebSocket ──────────────────────────────────────────
 @app.websocket("/ws")
 async def websocket_endpoint(ws: WebSocket):
+    origin = ws.headers.get("origin", "")
+    if origin and origin not in ALLOWED_ORIGINS:
+        await ws.close(code=4003, reason="Origin not allowed")
+        return
     await ws.accept()
     connected_clients.add(ws)
     try:
@@ -413,6 +417,10 @@ def _records_from_dataframe(df: pd.DataFrame) -> tuple[list[dict], set[str], set
     return records, set(mapped.keys()), set(CSV_COLUMN_MAP.keys()) - set(mapped.keys())
 
 
+MAX_CSV_SIZE = 50 * 1024 * 1024  # 50MB
+_csv_import_semaphore = asyncio.Semaphore(3)
+
+
 @app.post("/api/csv/import")
 async def api_csv_import(file: UploadFile = File(...)):
     """Import CSV or ZIP usage history data."""
@@ -423,43 +431,45 @@ async def api_csv_import(file: UploadFile = File(...)):
         raise HTTPException(400, "Only CSV and ZIP files are supported")
 
     try:
-        content = await file.read()
-        records = []
-        matched: set[str] = set()
-        unmatched: set[str] = set(CSV_COLUMN_MAP.keys())
-        parsed_files = []
+            content = await file.read()
+            if len(content) > MAX_CSV_SIZE:
+                raise HTTPException(413, f"File too large (max {MAX_CSV_SIZE // (1024*1024)}MB)")
+            records = []
+            matched: set[str] = set()
+            unmatched: set[str] = set(CSV_COLUMN_MAP.keys())
+            parsed_files = []
 
-        if suffix == ".csv":
-            df = pd.read_csv(io.BytesIO(content))
-            parsed, file_matched, file_unmatched = _records_from_dataframe(df)
-            records.extend(parsed)
-            matched.update(file_matched)
-            unmatched.intersection_update(file_unmatched)
-            parsed_files.append(file.filename)
-        else:
-            with zipfile.ZipFile(io.BytesIO(content)) as zf:
-                csv_names = [name for name in zf.namelist() if name.lower().endswith(".csv")]
-                if not csv_names:
-                    raise HTTPException(400, "ZIP must contain at least one CSV file")
-                for name in csv_names:
-                    with zf.open(name) as csv_file:
-                        df = pd.read_csv(csv_file)
-                    parsed, file_matched, file_unmatched = _records_from_dataframe(df)
-                    records.extend(parsed)
-                    matched.update(file_matched)
-                    unmatched.intersection_update(file_unmatched)
-                    parsed_files.append(name)
+            if suffix == ".csv":
+                df = pd.read_csv(io.BytesIO(content))
+                parsed, file_matched, file_unmatched = _records_from_dataframe(df)
+                records.extend(parsed)
+                matched.update(file_matched)
+                unmatched.intersection_update(file_unmatched)
+                parsed_files.append(file.filename)
+            else:
+                with zipfile.ZipFile(io.BytesIO(content)) as zf:
+                    csv_names = [name for name in zf.namelist() if name.lower().endswith(".csv")]
+                    if not csv_names:
+                        raise HTTPException(400, "ZIP must contain at least one CSV file")
+                    for name in csv_names:
+                        with zf.open(name) as csv_file:
+                            df = pd.read_csv(csv_file)
+                        parsed, file_matched, file_unmatched = _records_from_dataframe(df)
+                        records.extend(parsed)
+                        matched.update(file_matched)
+                        unmatched.intersection_update(file_unmatched)
+                        parsed_files.append(name)
 
-        count = await import_csv_data(records, file.filename)
+            count = await import_csv_data(records, file.filename)
 
-        return {
-            "status": "ok",
-            "imported": count,
-            "records_seen": len(records),
-            "files_parsed": parsed_files,
-            "columns_matched": sorted(matched),
-            "columns_unmatched": sorted(unmatched),
-        }
+            return {
+                "status": "ok",
+                "imported": count,
+                "records_seen": len(records),
+                "files_parsed": parsed_files,
+                "columns_matched": sorted(matched),
+                "columns_unmatched": sorted(unmatched),
+            }
 
     except HTTPException:
         raise

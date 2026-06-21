@@ -22,7 +22,7 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self' http://127.0.0.1:8080 http://localhost:8080; connect-src 'self' http://127.0.0.1:8080 http://localhost:8080 ws://127.0.0.1:8080 ws://localhost:8080 http://127.0.0.1:8081 http://localhost:8081; script-src 'self' https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: http://127.0.0.1:8081 http://localhost:8081"
+      "csp": "default-src 'self' http://127.0.0.1:8080 http://localhost:8080; connect-src 'self' http://127.0.0.1:8080 http://localhost:8080 ws://127.0.0.1:8080 ws://localhost:8080 http://127.0.0.1:8081 http://localhost:8081; script-src 'self' https://cdn.jsdelivr.net/npm/chart.js@4.4; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: http://127.0.0.1:8081 http://localhost:8081"
     }
   },
   "bundle": {

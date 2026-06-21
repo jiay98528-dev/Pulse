@@ -376,7 +376,7 @@
             <div class="settings-card">
                 <h3>关于</h3>
                 <div class="about-info">
-                    <span><strong>PULSE</strong> v2.0-m2</span>
+                    <span><strong>PULSE</strong> v2.0</span>
                     <span>实时数据看板 · 苏维埃构成主义设计</span>
                     <span>Tauri v2 + Python FastAPI + Chart.js</span>
                     <span>&copy; 2026 Pulse Project</span>
@@ -524,6 +524,20 @@
                     <button type="submit" class="btn-primary">保存设备</button>
                 </div>
             </form>
+        </div>
+    </div>
+
+    <!-- ═══ PAIR OVERLAY ═══ -->
+    <div id="pair-overlay" class="overlay hidden">
+        <div class="overlay-content">
+            <h3>配对请求</h3>
+            <p id="pair-request-info"></p>
+            <label><input type="checkbox" id="pair-persistent"> 持久信任</label>
+            <div id="pair-pin-group">
+                <label>输入PIN <input type="password" id="pair-pin-input"></label>
+            </div>
+            <button class="btn-primary" id="pair-approve-btn">允许</button>
+            <button class="btn-secondary" id="pair-reject-btn">拒绝</button>
         </div>
     </div>
 

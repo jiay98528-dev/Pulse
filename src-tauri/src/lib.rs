@@ -139,6 +139,10 @@ pub fn run() {
                 }
             });
 
+            if std::env::args().any(|a| a == "--minimized") {
+                let _ = window.hide();
+            }
+
             spawn_backend(app);
 
             // --- System Tray ---

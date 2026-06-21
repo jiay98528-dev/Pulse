@@ -28,8 +28,6 @@ const state = {
     connected: false,
     systemHistory: { cpu: [], mem: [], timestamps: [] },
     tokenHistory: [],
-    costHistory: [],
-    balanceHistory: [],
     maxHistoryPoints: 60,
     charts: {},
     pendingCsvFile: null,
@@ -624,13 +622,10 @@ var WidgetEngine = {
                     // Temperature-based color classes
                     valEl.className = 'widget-value';
                     if (temp > 80) {
-                        valEl.classList.add('text-hot');
                         valEl.style.color = chartColors.red;
                     } else if (temp > 60) {
-                        valEl.classList.add('text-warm');
                         valEl.style.color = chartColors.yellow;
                     } else {
-                        valEl.classList.add('text-cool');
                         valEl.style.color = chartColors.green;
                     }
                 } else {
@@ -870,6 +865,17 @@ function handleMessage(msg) {
             }
             break;
         case 'pong':
+            break;
+        case 'pair_request':
+            var pairOverlay = document.getElementById("pair-overlay");
+            if (pairOverlay) { pairOverlay.classList.remove("hidden"); }
+            break;
+        case 'pair_success':
+            showToast("配对成功", "success");
+            if (typeof loadDevices === "function") loadDevices();
+            break;
+        case 'pair_rejected':
+            showToast("配对被拒绝", "error");
             break;
     }
 }
@@ -2454,8 +2460,8 @@ function showOfflineMarketplace(grid, status, empty) {
                 '<span style="font-size:24px;color:' + t.previewIconColor + ';">' + t.previewIcon + '</span>' +
             '</div>' +
             '<div class="marketplace-info">' +
-                '<div class="marketplace-name">' + t.name + '</div>' +
-                '<div class="marketplace-author">' + t.author + ' &middot; ' + t.type + '</div>' +
+                '<div class="marketplace-name">' + escapeHtml(t.name) + '</div>' +
+                '<div class="marketplace-author">' + escapeHtml(t.author) + ' &middot; ' + t.type + '</div>' +
                 '<div class="marketplace-badge free">免费</div>' +
             '</div>';
         grid.appendChild(item);
@@ -2871,15 +2877,12 @@ function initDeviceForm() {
   if (cancelBtn) cancelBtn.onclick = function() {
     document.getElementById("device-form-overlay").classList.add("hidden");
   };
-  var addButtons = [
-    document.getElementById("device-add-btn"),
-    document.getElementById("hwAddDeviceBtn"),
-  ].filter(Boolean);
-  addButtons.forEach(function(btn) {
-    btn.onclick = function() {
+  var addBtn = document.getElementById("hwAddDeviceBtn");
+  if (addBtn) {
+    addBtn.addEventListener("click", function() {
       document.getElementById("device-form-overlay").classList.remove("hidden");
-    };
-  });
+    });
+  }
 }
 
 // --- Plugins ---

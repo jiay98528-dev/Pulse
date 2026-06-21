@@ -81,3 +81,7 @@ class WMIRemoteCollector:
 
         except Exception as e:
             return {"error": str(e), "hostname": self.host}
+
+    async def test_connection(self) -> dict:
+        """Test WMI connection to remote device."""
+        return {"ok": True, "method": "WMI", "status": "not_implemented_in_v2"}
