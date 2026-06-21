@@ -12,10 +12,13 @@
 """
 
 import json
+import random
 import secrets
 import time
 from datetime import datetime, timezone
 from typing import Optional
+
+from config import load_config, save_config
 
 # 配对请求过期时间（秒）
 PENDING_REQUEST_TTL = 120
@@ -42,8 +45,12 @@ class PairingManager:
         """
         self._db = db
         self._pending_requests: dict[str, dict] = {}
-        # 持久信任 PIN（从配置文件读取或默认）
-        self._trust_pin = "0000"
+        # 持久信任 PIN（从配置文件读取，不存在则随机生成并持久化）
+        cfg = load_config()
+        self._trust_pin = cfg.get("lan_trust_pin", "") or str(random.randint(100000, 999999))
+        if not cfg.get("lan_trust_pin"):
+            cfg["lan_trust_pin"] = self._trust_pin
+            save_config(cfg)
         global _manager_instance
         _manager_instance = self
         self._connected_ws_clients: set = set()
@@ -137,8 +144,8 @@ class PairingManager:
 
         # 验证持久信任 PIN
         if persistent:
-            if pin != self._trust_pin:
-                return {"status": "error", "message": "PIN 错误"}
+            if len(pin) < 4 or pin != self._trust_pin:
+                return {"status": "error", "message": "PIN 错误（至少4位数字）"}
             trust_flag = 1
         else:
             trust_flag = 0
