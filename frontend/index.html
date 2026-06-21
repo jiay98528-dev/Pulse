@@ -246,6 +246,9 @@
                     <div class="csv-format-note">
                         <p>支持 CSV 或 Deepseek 导出 ZIP。列名: timestamp, model, input_tokens, output_tokens, cached_tokens, total_tokens, cost</p>
                     </div>
+                    <div id="analysis-data-source" class="hidden" style="margin-top:8px;font-size:var(--text-xs);color:var(--color-grey-50);font-family:var(--font-mono);">
+                        数据来源: —
+                    </div>
                 </div>
             </div>
             <div class="analysis-chart-grid">
@@ -530,7 +533,7 @@
     <!-- ═══ PAIR OVERLAY ═══ -->
     <div id="pair-overlay" class="overlay hidden">
         <div class="overlay-content" style="min-width:380px;">
-            <h3>L A N  配对请求</h3>
+            <h3>L A N 配对请求</h3>
             <p id="pair-request-info" style="margin:16px 0;color:var(--color-grey-70);">设备请求监控本机</p>
             <label style="display:flex;align-items:center;gap:8px;margin-bottom:12px;">
                 <input type="checkbox" id="pair-persistent"> 持久信任
