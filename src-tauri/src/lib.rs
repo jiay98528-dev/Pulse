@@ -1,8 +1,12 @@
+#[cfg(not(debug_assertions))]
+use std::fs;
+#[cfg(debug_assertions)]
 use std::path::PathBuf;
+#[cfg(debug_assertions)]
 use std::process::{Child, Command};
 use std::sync::Mutex;
 
-#[cfg(target_os = "windows")]
+#[cfg(all(target_os = "windows", debug_assertions))]
 use std::os::windows::process::CommandExt;
 
 use tauri::{
@@ -10,9 +14,21 @@ use tauri::{
     menu::{MenuBuilder, MenuItemBuilder},
     tray::{MouseButton, TrayIconBuilder, TrayIconEvent},
 };
+#[cfg(not(debug_assertions))]
+use tauri_plugin_shell::{
+    ShellExt,
+    process::{CommandChild, CommandEvent},
+};
 
 /// Managed state holding the Python backend child process.
-struct BackendProcess(Mutex<Option<Child>>);
+enum BackendChild {
+    #[cfg(debug_assertions)]
+    Dev(Child),
+    #[cfg(not(debug_assertions))]
+    Sidecar(CommandChild),
+}
+
+struct BackendProcess(Mutex<Option<BackendChild>>);
 
 /// Determine the Pulse project root directory.
 ///
@@ -21,6 +37,7 @@ struct BackendProcess(Mutex<Option<Child>>);
 /// and `frontend/` directories).
 ///
 /// Falls back to walking up from the current working directory.
+#[cfg(debug_assertions)]
 fn get_project_root() -> PathBuf {
     #[cfg(debug_assertions)]
     {
@@ -54,6 +71,15 @@ fn get_project_root() -> PathBuf {
 
 /// Spawn the Python backend script and store the child handle in app state.
 fn spawn_backend(app: &tauri::App) {
+    #[cfg(debug_assertions)]
+    spawn_dev_backend(app);
+
+    #[cfg(not(debug_assertions))]
+    spawn_release_backend(app);
+}
+
+#[cfg(debug_assertions)]
+fn spawn_dev_backend(app: &tauri::App) {
     let project_root = get_project_root();
 
     #[cfg(target_os = "windows")]
@@ -78,7 +104,7 @@ fn spawn_backend(app: &tauri::App) {
 
     match cmd.spawn() {
         Ok(child) => {
-            app.manage(BackendProcess(Mutex::new(Some(child))));
+            app.manage(BackendProcess(Mutex::new(Some(BackendChild::Dev(child)))));
             println!(
                 "[Pulse] Backend started via {}",
                 script_path.display()
@@ -94,23 +120,108 @@ fn spawn_backend(app: &tauri::App) {
     }
 }
 
+#[cfg(not(debug_assertions))]
+fn spawn_release_backend(app: &tauri::App) {
+    let app_data_dir = match app.path().app_data_dir() {
+        Ok(path) => path.join("Pulse"),
+        Err(e) => {
+            eprintln!("[Pulse] Failed to resolve app data directory: {e}");
+            return;
+        }
+    };
+
+    if let Err(e) = fs::create_dir_all(&app_data_dir) {
+        eprintln!(
+            "[Pulse] Failed to create backend data directory {}: {}",
+            app_data_dir.display(),
+            e
+        );
+        return;
+    }
+
+    let command = match app.shell().sidecar("pulse-backend") {
+        Ok(command) => command
+            .env("PULSE_DATA_DIR", app_data_dir.as_os_str())
+            .env("PULSE_HOST", "127.0.0.1")
+            .env("PULSE_PORT", "8080"),
+        Err(e) => {
+            eprintln!("[Pulse] Failed to resolve backend sidecar: {e}");
+            return;
+        }
+    };
+
+    match command.spawn() {
+        Ok((mut rx, child)) => {
+            let pid = child.pid();
+            tauri::async_runtime::spawn(async move {
+                while let Some(event) = rx.recv().await {
+                    match event {
+                        CommandEvent::Stdout(line) => {
+                            let text = String::from_utf8_lossy(&line);
+                            print!("[Pulse backend] {}", text);
+                        }
+                        CommandEvent::Stderr(line) => {
+                            let text = String::from_utf8_lossy(&line);
+                            eprint!("[Pulse backend] {}", text);
+                        }
+                        CommandEvent::Error(error) => {
+                            eprintln!("[Pulse backend] {error}");
+                        }
+                        CommandEvent::Terminated(payload) => {
+                            println!(
+                                "[Pulse backend] terminated code={:?} signal={:?}",
+                                payload.code, payload.signal
+                            );
+                        }
+                        _ => {}
+                    }
+                }
+            });
+            app.manage(BackendProcess(Mutex::new(Some(BackendChild::Sidecar(child)))));
+            println!(
+                "[Pulse] Backend sidecar started pid={} data_dir={}",
+                pid,
+                app_data_dir.display()
+            );
+        }
+        Err(e) => {
+            eprintln!("[Pulse] Failed to start backend sidecar: {e}");
+        }
+    }
+}
+
 fn cleanup_backend(app: &AppHandle) {
     if let Some(state) = app.try_state::<BackendProcess>() {
         if let Ok(mut guard) = state.0.lock() {
-            if let Some(mut child) = guard.take() {
-                // Kill entire process tree on Windows so python.exe isn't orphaned
-                #[cfg(target_os = "windows")]
-                {
-                    let pid = child.id();
-                    let _ = Command::new("taskkill")
-                        .args(["/F", "/T", "/PID", &pid.to_string()])
-                        .creation_flags(0x08000000)
-                        .spawn();
-                }
-                let _ = child.kill();
-                let _ = child.wait();
-                println!("[Pulse] Backend process terminated");
+            if let Some(child) = guard.take() {
+                kill_backend_child(child);
             }
+        }
+    }
+}
+
+fn kill_backend_child(child: BackendChild) {
+    match child {
+        #[cfg(debug_assertions)]
+        BackendChild::Dev(mut child) => {
+            // Kill entire process tree on Windows so python.exe isn't orphaned.
+            #[cfg(target_os = "windows")]
+            {
+                let pid = child.id();
+                let _ = Command::new("taskkill")
+                    .args(["/F", "/T", "/PID", &pid.to_string()])
+                    .creation_flags(0x08000000)
+                    .spawn();
+            }
+            let _ = child.kill();
+            let _ = child.wait();
+            println!("[Pulse] Backend process terminated");
+        }
+        #[cfg(not(debug_assertions))]
+        BackendChild::Sidecar(child) => {
+            let pid = child.pid();
+            let _ = child.kill();
+            println!("[Pulse] Backend sidecar terminated pid={pid}");
         }
     }
 }
@@ -166,24 +277,7 @@ pub fn run() {
                             }
                         }
                         "quit" => {
-                            // Clean up backend before exit
-                            if let Some(state) = app.try_state::<BackendProcess>() {
-                                if let Ok(mut guard) = state.0.lock() {
-                                    if let Some(mut child) = guard.take() {
-                                        // Kill entire process tree on Windows so python.exe isn't orphaned
-                                        #[cfg(target_os = "windows")]
-                                        {
-                                            let pid = child.id();
-                                            let _ = Command::new("taskkill")
-                                                .args(["/F", "/T", "/PID", &pid.to_string()])
-                                                .creation_flags(0x08000000)
-                                                .spawn();
-                                        }
-                                        let _ = child.kill();
-                                        let _ = child.wait();
-                                    }
-                                }
-                            }
+                            cleanup_backend(app);
                             app.exit(0);
                         }
                         _ => {}
