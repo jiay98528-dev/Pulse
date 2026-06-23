@@ -1,5 +1,6 @@
 """Deepseek API data collector — v2.0 balance-only (usage via CSV import)."""
 import aiohttp
+import sys
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -58,7 +59,6 @@ class DeepseekCollector:
                         }
                     return None
         except Exception as e:
-            import sys
             print(f"[Deepseek] API error fetching balance: {e}", file=sys.stderr)
             return None
 

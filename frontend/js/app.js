@@ -873,6 +873,12 @@ function connectWs() {
     };
 }
 
+function reloadPluginUI() {
+    if (typeof loadDevices === 'function') loadDevices();
+    if (typeof loadLanHardwareDevices === 'function') loadLanHardwareDevices();
+    if (typeof loadPlugins === 'function') loadPlugins();
+}
+
 function handleMessage(msg) {
     switch (msg.type) {
         case 'system':
@@ -902,9 +908,7 @@ function handleMessage(msg) {
         case 'pair_success':
             showToast('配对成功', 'success');
             state.pendingPairToken = null;
-            if (typeof loadDevices === 'function') loadDevices();
-            if (typeof loadLanHardwareDevices === 'function') loadLanHardwareDevices();
-            if (typeof loadPlugins === 'function') loadPlugins();
+            reloadPluginUI();
             break;
         case 'pair_rejected':
             showToast('配对被拒绝', 'error');
@@ -3048,6 +3052,7 @@ function showLanDeviceDrawer(device) {
   var metrics = splitMetrics(device.shared_metrics);
   var metricSet = {};
   metrics.forEach(function(m) { metricSet[m] = true; });
+  var lanMetrics = getLanDeviceMetrics(device);
   drawer.innerHTML =
     '<div class="lan-drawer-panel">' +
       '<div class="lan-drawer-header">' +
@@ -3061,12 +3066,12 @@ function showLanDeviceDrawer(device) {
       '</div>' +
       '<div class="lan-drawer-chips">' + (metrics.length ? metrics.map(function(m) { return '<span>' + escapeHtml(m) + '</span>'; }).join("") : '<span>NO METRICS</span>') + '</div>' +
       '<div class="lan-drawer-grid">' +
-        buildLanMetricPanel(device, "cpu", "CPU", metricSet) +
-        buildLanMetricPanel(device, "memory", "MEMORY", metricSet) +
-        buildLanMetricPanel(device, "disk", "DISK", metricSet) +
-        buildLanMetricPanel(device, "network", "NETWORK", metricSet) +
-        buildLanMetricPanel(device, "gpu", "GPU", metricSet) +
-        buildLanMetricPanel(device, "battery", "BATTERY", metricSet) +
+        buildLanMetricPanel(device, "cpu", "CPU", metricSet, lanMetrics) +
+        buildLanMetricPanel(device, "memory", "MEMORY", metricSet, lanMetrics) +
+        buildLanMetricPanel(device, "disk", "DISK", metricSet, lanMetrics) +
+        buildLanMetricPanel(device, "network", "NETWORK", metricSet, lanMetrics) +
+        buildLanMetricPanel(device, "gpu", "GPU", metricSet, lanMetrics) +
+        buildLanMetricPanel(device, "battery", "BATTERY", metricSet, lanMetrics) +
       '</div>' +
     '</div>';
   drawer.classList.remove("hidden");
@@ -3074,7 +3079,7 @@ function showLanDeviceDrawer(device) {
   drawer.addEventListener("click", function(e) {
     if (e.target === drawer) closeLanDeviceDrawer();
   }, { once: true });
-  renderLanDrawerCharts(device, metricSet);
+  renderLanDrawerCharts(device, metricSet, lanMetrics);
 }
 
 function closeLanDeviceDrawer() {
@@ -3087,8 +3092,8 @@ function getLanDeviceMetrics(device) {
   return device.metrics || device.data || device.snapshot || {};
 }
 
-function buildLanMetricPanel(device, key, title, metricSet) {
-  var data = getLanDeviceMetrics(device);
+function buildLanMetricPanel(device, key, title, metricSet, data) {
+  data = data || getLanDeviceMetrics(device);
   var authorized = !!metricSet[key];
   var hasData = authorized && !!data[key];
   return '<div class="lan-metric-panel">' +
@@ -3097,8 +3102,8 @@ function buildLanMetricPanel(device, key, title, metricSet) {
   '</div>';
 }
 
-function renderLanDrawerCharts(device, metricSet) {
-  var data = getLanDeviceMetrics(device);
+function renderLanDrawerCharts(device, metricSet, data) {
+  data = data || getLanDeviceMetrics(device);
   if (metricSet.cpu && data.cpu && document.getElementById("lan-chart-cpu")) {
     var cpu = Number(data.cpu.percent) || 0;
     createLanDrawerChart("cpu", "doughnut", ["CPU", "IDLE"], [cpu, Math.max(0, 100 - cpu)]);
@@ -3366,8 +3371,7 @@ function showLanMetricsConfig(device) {
       if (!resp.ok) throw new Error("HTTP " + resp.status);
       overlay.classList.add("hidden");
       showToast("共享指标已保存", "success");
-      await loadPlugins();
-      await loadLanHardwareDevices();
+      await Promise.all([loadPlugins(), loadLanHardwareDevices()]);
     } catch (e) {
       showToast("保存共享指标失败: " + e.message, "error");
     }
@@ -3389,16 +3393,6 @@ async function togglePlugin(name, enable) {
 
 async function scanLanDevices() {
   showLanScan();
-  try {
-    showToast("正在扫描局域网设备...", "info");
-    var resp = await fetch(apiUrl("/api/lan/discover?timeout=3"), { method: "POST" });
-    if (!resp.ok) throw new Error("HTTP " + resp.status);
-    var result = await resp.json();
-    var devices = result.devices || [];
-    showToast("发现 " + devices.length + " 台设备", devices.length ? "success" : "info");
-  } catch (e) {
-    showToast("扫描失败: " + e.message, "error");
-  }
 }
 
 // ── Theme Marketplace Popup ────────────────────────────
@@ -3409,7 +3403,6 @@ function showThemeMarketplace() {
     var grid = document.getElementById('theme-marketplace-grid');
     var status = document.getElementById('theme-marketplace-status');
     if (grid && status) {
-        status.textContent = '加载中...';
         grid.innerHTML = '';
         loadMarketplaceToGrid(grid, status, document.getElementById('theme-marketplace-empty'));
     }
@@ -3544,9 +3537,7 @@ function initPairingOverlay() {
                 if (overlay) overlay.classList.add('hidden');
                 state.pendingPairToken = null;
                 showToast('Pair approved', 'success');
-                if (typeof loadDevices === 'function') loadDevices();
-                if (typeof loadLanHardwareDevices === 'function') loadLanHardwareDevices();
-                if (typeof loadPlugins === 'function') loadPlugins();
+                reloadPluginUI();
             } catch (e) {
                 showToast('Pair approval failed: ' + e.message, 'error');
             }
@@ -3594,8 +3585,7 @@ function initPhase45() {
   if (hardwareTab) {
     hardwareTab.addEventListener('click', function() {
       setTimeout(function() {
-        loadDevices();
-        loadLanHardwareDevices();
+        Promise.all([loadDevices(), loadLanHardwareDevices()]);
       }, 100);
     });
   }

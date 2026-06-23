@@ -524,6 +524,13 @@ def _pivot_deepseek_amount_df(df: pd.DataFrame) -> pd.DataFrame:
     return grouped
 
 
+def _annotate_records(records: list, source_file: str, imported_at: str):
+    """Attach source metadata to each record in-place."""
+    for r in records:
+        r["source_file"] = source_file
+        r["imported_at"] = imported_at
+
+
 MAX_CSV_SIZE = 50 * 1024 * 1024  # 50MB
 MAX_THEME_PACKAGE_SIZE = 10 * 1024 * 1024  # 10MB
 _csv_import_semaphore = asyncio.Semaphore(3)
@@ -553,9 +560,7 @@ async def api_csv_import(file: UploadFile = File(...)):
                 df = pd.read_csv(io.BytesIO(content))
                 df = _pivot_deepseek_amount_df(df)
                 parsed, file_matched, file_unmatched = _records_from_dataframe(df)
-                for record in parsed:
-                    record["source_file"] = file.filename
-                    record["imported_at"] = imported_at
+                _annotate_records(parsed, file.filename, imported_at)
                 records.extend(parsed)
                 matched.update(file_matched)
                 unmatched.intersection_update(file_unmatched)
@@ -570,10 +575,7 @@ async def api_csv_import(file: UploadFile = File(...)):
                             df = pd.read_csv(csv_file)
                             df = _pivot_deepseek_amount_df(df)
                         parsed, file_matched, file_unmatched = _records_from_dataframe(df)
-                        source_file = Path(name.replace("\\", "/")).name
-                        for record in parsed:
-                            record["source_file"] = source_file
-                            record["imported_at"] = imported_at
+                        _annotate_records(parsed, Path(name.replace("\\", "/")).name, imported_at)
                         records.extend(parsed)
                         matched.update(file_matched)
                         unmatched.intersection_update(file_unmatched)
@@ -596,6 +598,14 @@ async def api_csv_import(file: UploadFile = File(...)):
             raise HTTPException(400, f"CSV parse error: {str(e)}")
 
 
+def _find_in_zip(names: dict, filename: str):
+    """Find a file in normalized zip name dict, trying exact match then path suffix."""
+    name = names.get(filename)
+    if name:
+        return name
+    return next((orig for norm, orig in names.items() if norm.endswith(f"/{filename}")), None)
+
+
 @app.post("/api/theme/import")
 async def api_theme_import(file: UploadFile = File(...)):
     """Import a .pulse-theme ZIP package and return its theme payload."""
@@ -611,10 +621,7 @@ async def api_theme_import(file: UploadFile = File(...)):
     try:
         with zipfile.ZipFile(io.BytesIO(content)) as zf:
             names = {name.replace("\\", "/"): name for name in zf.namelist()}
-            theme_name = names.get("theme.json")
-            if not theme_name:
-                theme_name = next((original for normalized, original in names.items()
-                                   if normalized.endswith("/theme.json")), None)
+            theme_name = _find_in_zip(names, "theme.json")
             if not theme_name:
                 raise HTTPException(400, "Theme package must contain theme.json")
 
@@ -623,10 +630,7 @@ async def api_theme_import(file: UploadFile = File(...)):
             with zf.open(theme_name) as theme_file:
                 theme = json.loads(theme_file.read().decode("utf-8-sig"))
 
-            css_name = names.get("custom.css")
-            if not css_name:
-                css_name = next((original for normalized, original in names.items()
-                                 if normalized.endswith("/custom.css")), None)
+            css_name = _find_in_zip(names, "custom.css")
             if css_name:
                 if zf.getinfo(css_name).file_size > 256 * 1024:
                     raise HTTPException(413, "custom.css is too large")
