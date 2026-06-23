@@ -33,6 +33,16 @@ class LANMonitorPlugin(PluginBase):
         """Start background monitoring loop and discovery listener."""
         self._running = True
 
+        # Read device_name from config (fallback to hostname if not set)
+        try:
+            from config import load_config
+            cfg = load_config()
+            cfg_name = cfg.get("lan_device_name", "")
+            if cfg_name:
+                self.device_name = cfg_name
+        except Exception:
+            pass  # best-effort: discovery.py falls back to hostname
+
         # Start UDP discovery listener (best-effort)
         transport = await start_discovery_listener(self)
         if transport is None:

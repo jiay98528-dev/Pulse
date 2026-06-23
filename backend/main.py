@@ -16,7 +16,7 @@ import pandas as pd
 
 from config import load_config, save_config, is_configured
 from database import (
-    init_db, save_usage_records, save_balance,
+    init_db, save_balance,
     import_csv_data, get_usage_summary, get_usage_history, get_model_breakdown,
     get_devices, get_device, add_device, update_device, delete_device,
 )
@@ -124,6 +124,9 @@ connected_clients: set[WebSocket] = set()
 
 # Plugin manager (initialized in lifespan)
 plugin_manager: Optional[PluginManager] = None
+
+# Server start time (set in lifespan)
+startup_time: Optional[datetime] = None
 
 # Latest cached data
 latest_system_data = {}

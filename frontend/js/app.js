@@ -2541,6 +2541,43 @@ function initThemeTools() {
 //  Marketplace (M6.5)
 // ══════════════════════════════════════════════════
 
+function _renderMarketplaceCard(t) {
+    var item = document.createElement('div');
+    item.className = 'marketplace-item';
+    item.setAttribute('data-theme-id', t.id);
+
+    var badgeText = (t.price > 0) ? '¥' + Number(t.price).toFixed(2) : '免费';
+    var badgeClass = (t.price > 0) ? 'paid' : 'free';
+    var typeLabel = t.type === 'official' ? '官方' : (t.type === 'community' ? '社区' : (t.type || (t.price > 0 ? '官方' : '社区')));
+
+    item.innerHTML =
+        '<div class="marketplace-preview" style="background:' + (t.previewColor || '#000') + ';border:1px solid #333;">' +
+            '<span style="font-size:24px;color:' + (t.previewIconColor || '#666') + ';">' + (t.previewIcon || '★') + '</span>' +
+        '</div>' +
+        '<div class="marketplace-info">' +
+            '<div class="marketplace-name">' + escapeHtml(t.name) + '</div>' +
+            '<div class="marketplace-author">' + escapeHtml(t.author || '未知') + ' · ' + typeLabel + '</div>' +
+            '<div class="marketplace-badge ' + badgeClass + '">' + badgeText + '</div>' +
+        '</div>';
+
+    item.addEventListener('click', function() { showThemeDetail(t); });
+    return item;
+}
+
+function _renderMarketplaceGrid(themes, grid, status, empty) {
+    grid.innerHTML = '';
+    if (!Array.isArray(themes) || themes.length === 0) {
+        if (status) status.classList.add('hidden');
+        if (empty) empty.classList.remove('hidden');
+        return;
+    }
+    if (status) { status.classList.add('hidden'); status.textContent = ''; }
+    if (empty) empty.classList.add('hidden');
+    for (var i = 0; i < themes.length; i++) {
+        grid.appendChild(_renderMarketplaceCard(themes[i]));
+    }
+}
+
 async function loadMarketplace() {
     var grid = document.getElementById('marketplace-grid');
     var status = document.getElementById('marketplace-status');
@@ -2551,42 +2588,7 @@ async function loadMarketplace() {
         var resp = await fetch(STORE_API + '/v1/themes');
         if (!resp.ok) throw new Error('HTTP ' + resp.status);
         var themes = await resp.json();
-        if (!Array.isArray(themes) || themes.length === 0) {
-            if (status) status.classList.add('hidden');
-            if (empty) empty.classList.remove('hidden');
-            return;
-        }
-
-        if (status) status.classList.add('hidden');
-        if (empty) empty.classList.add('hidden');
-        grid.innerHTML = '';
-
-        for (var i = 0; i < themes.length; i++) {
-            var t = themes[i];
-            var item = document.createElement('div');
-            item.className = 'marketplace-item';
-            item.setAttribute('data-theme-id', t.id);
-
-            var badgeText = t.price > 0 ? '¥' + t.price.toFixed(2) : '免费';
-            var badgeClass = t.price > 0 ? 'paid' : 'free';
-            var typeLabel = t.type || (t.price > 0 ? '官方' : '社区');
-
-            item.innerHTML =
-                '<div class="marketplace-preview" style="background:' + (t.previewColor || '#000') + ';border:1px solid #333;">' +
-                    '<span style="font-size:24px;color:' + (t.previewIconColor || '#666') + ';">' + (t.previewIcon || '★') + '</span>' +
-                '</div>' +
-                '<div class="marketplace-info">' +
-                    '<div class="marketplace-name">' + escapeHtml(t.name) + '</div>' +
-                    '<div class="marketplace-author">' + escapeHtml(t.author || '未知') + ' &middot; ' + typeLabel + '</div>' +
-                    '<div class="marketplace-badge ' + badgeClass + '">' + badgeText + '</div>' +
-                '</div>';
-
-            (function(theme) {
-                item.addEventListener('click', function() { showThemeDetail(theme); });
-            })(t);
-
-            grid.appendChild(item);
-        }
+        _renderMarketplaceGrid(themes, grid, status, empty);
     } catch (e) {
         console.warn('[Marketplace] Cannot reach store:', e);
         if (status) {
@@ -3415,28 +3417,11 @@ function showThemeMarketplace() {
 async function loadMarketplaceToGrid(grid, status, empty) {
     status.textContent = '加载中...';
     try {
-        var resp = await fetch((window.STORE_API || 'http://127.0.0.1:8081') + '/v1/themes');
+        var resp = await fetch(STORE_API + '/v1/themes');
         if (!resp.ok) throw new Error('HTTP ' + resp.status);
         var themes = await resp.json();
-        grid.innerHTML = '';
-        if (!themes.length) { empty.classList.remove('hidden'); status.textContent = ''; return; }
-        empty.classList.add('hidden');
-        status.textContent = themes.length + ' 个主题可用';
-        themes.forEach(function(t) {
-            var item = document.createElement('div');
-            item.className = 'marketplace-item';
-            var typeLabel = t.type === 'official' ? '官方' : '社区';
-            var badgeClass = t.price > 0 ? 'paid' : 'free';
-            var badgeText = t.price > 0 ? '¥' + t.price : '免费';
-            item.innerHTML = '<div class="marketplace-preview" style="background:#000;border:1px solid #333;">' +
-                '<span style="font-size:24px;">★</span></div>' +
-                '<div class="marketplace-info">' +
-                '<div class="marketplace-name">' + escapeHtml(t.name) + '</div>' +
-                '<div class="marketplace-author">' + escapeHtml(t.author) + ' · ' + typeLabel + '</div>' +
-                '<div class="marketplace-badge ' + badgeClass + '">' + badgeText + '</div></div>';
-            item.addEventListener('click', function() { showThemeDetail(t); });
-            grid.appendChild(item);
-        });
+        _renderMarketplaceGrid(themes, grid, status, empty);
+        if (themes.length) status.textContent = themes.length + ' 个主题可用';
     } catch (e) {
         status.textContent = '商店暂不可用（离线模式）';
         status.style.color = 'var(--color-grey-50)';

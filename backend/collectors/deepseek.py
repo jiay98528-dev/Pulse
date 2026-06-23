@@ -57,7 +57,9 @@ class DeepseekCollector:
                             "currency": currency
                         }
                     return None
-        except Exception:
+        except Exception as e:
+            import sys
+            print(f"[Deepseek] API error fetching balance: {e}", file=sys.stderr)
             return None
 
     async def fetch_all(self) -> dict:

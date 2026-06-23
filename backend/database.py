@@ -37,14 +37,6 @@ async def init_db():
             )
         """)
         await db.execute("""
-            CREATE TABLE IF NOT EXISTS spending_limits (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                type TEXT NOT NULL,
-                limit_amount REAL NOT NULL,
-                updated_at TEXT NOT NULL
-            )
-        """)
-        await db.execute("""
             CREATE TABLE IF NOT EXISTS csv_imports (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 filename TEXT NOT NULL,
@@ -105,7 +97,7 @@ async def save_usage_records(records: list):
         now = datetime.now(timezone.utc).isoformat()
         await db.executemany(
             "INSERT INTO deepseek_usage (timestamp, model, input_tokens, output_tokens, cached_tokens, total_tokens, cost) VALUES (?, ?, ?, ?, ?, ?, ?)",
-            [(now, r.get("model", "unknown"),
+            [(r.get("timestamp", now), r.get("model", "unknown"),
               r.get("input_tokens", 0),
               r.get("output_tokens", 0),
               r.get("cached_tokens", 0),
@@ -193,19 +185,6 @@ async def get_model_breakdown(days: int = 1) -> List[dict]:
         rows = await cursor.fetchall()
         return [dict(r) for r in rows]
 
-
-async def get_balance_history(days: int = 30) -> List[dict]:
-    """Get balance snapshots for trend chart."""
-    async with aiosqlite.connect(DB_PATH) as db:
-        db.row_factory = aiosqlite.Row
-        cursor = await db.execute("""
-            SELECT timestamp, balance, currency
-            FROM deepseek_balance
-            WHERE timestamp >= datetime('now', ? || ' days', 'utc')
-            ORDER BY timestamp ASC
-        """, (f"-{days}",))
-        rows = await cursor.fetchall()
-        return [dict(r) for r in rows]
 
 
 async def import_csv_data(records: list, filename: str) -> int:
@@ -385,9 +364,9 @@ async def update_lan_device(device_id: int, **kwargs) -> bool:
     sets = ", ".join(f"{k} = ?" for k in updates)
     vals = list(updates.values()) + [device_id]
     async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute(f"UPDATE lan_devices SET {sets} WHERE id = ?", vals)
+        cursor = await db.execute(f"UPDATE lan_devices SET {sets} WHERE id = ?", vals)
         await db.commit()
-        return True
+        return cursor.rowcount > 0
 
 
 async def delete_lan_device(device_id: int) -> bool:

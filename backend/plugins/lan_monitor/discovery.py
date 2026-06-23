@@ -74,7 +74,7 @@ async def start_discovery_listener(plugin):
     Args:
         plugin: The LANMonitorPlugin instance (used for device name/version).
     """
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
 
     class DiscoveryProtocol(asyncio.DatagramProtocol):
         def connection_made(self, transport):
@@ -142,7 +142,7 @@ async def send_discovery_broadcast(timeout: float = 5.0) -> list[dict]:
     Returns:
         List of discovered device info dicts.
     """
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     discovered = []
 
     class BroadcastProtocol(asyncio.DatagramProtocol):
