@@ -1189,6 +1189,13 @@ function refreshTabData(tab) {
         } else {
             loadAnalysisData();
         }
+    } else if (tab === 'settings') {
+        setTimeout(function() {
+            var grid = document.getElementById('marketplace-grid');
+            if (grid && grid.children.length === 0) {
+                loadMarketplace();
+            }
+        }, 100);
     } else if (tab === 'plugins') {
         setTimeout(loadPlugins, 100);
     }
