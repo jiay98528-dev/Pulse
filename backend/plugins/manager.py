@@ -8,7 +8,12 @@ from typing import Optional
 
 from plugins.base import PluginBase
 
-PLUGINS_DIR = Path(__file__).parent
+try:
+    from runtime_paths import get_plugins_dir
+except ImportError:  # Allows package-style imports in smoke tests.
+    from ..runtime_paths import get_plugins_dir
+
+PLUGINS_DIR = get_plugins_dir()
 
 
 class PluginManager:
@@ -27,6 +32,10 @@ class PluginManager:
         Returns a list of status dicts for all found (but not yet initialised) plugins.
         """
         found = []
+        if not PLUGINS_DIR.exists():
+            print(f"[Plugin] Plugin directory not found: {PLUGINS_DIR}")
+            return found
+
         for entry in sorted(PLUGINS_DIR.iterdir()):
             if not entry.is_dir():
                 continue
