@@ -2,10 +2,14 @@
 import json
 import aiosqlite
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import Optional, List
 
-DB_PATH = Path(__file__).parent.parent / "data" / "pulse.db"
+try:
+    from runtime_paths import get_db_path
+except ImportError:  # Allows package-style imports in smoke tests.
+    from .runtime_paths import get_db_path
+
+DB_PATH = get_db_path()
 
 
 async def init_db():

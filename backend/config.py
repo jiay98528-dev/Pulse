@@ -2,9 +2,13 @@
 import copy
 import json
 import os
-from pathlib import Path
 
-CONFIG_PATH = Path(__file__).parent / "config.json"
+try:
+    from runtime_paths import get_config_path
+except ImportError:  # Allows package-style imports in smoke tests.
+    from .runtime_paths import get_config_path
+
+CONFIG_PATH = get_config_path()
 DEFAULT_CONFIG = {
     "ai_provider": "deepseek",
     "deepseek_api_key": "",
@@ -27,27 +31,45 @@ DEFAULT_CONFIG = {
 }
 
 
+def _apply_env_overrides(cfg: dict) -> dict:
+    host = os.environ.get("PULSE_HOST")
+    if host:
+        cfg["http_host"] = host
+
+    port = os.environ.get("PULSE_PORT")
+    if port:
+        try:
+            cfg["http_port"] = int(port)
+        except ValueError:
+            pass
+
+    return cfg
+
+
 def load_config() -> dict:
     """Load config from JSON file, creating default if missing."""
-    if not CONFIG_PATH.exists():
+    config_path = get_config_path()
+    if not config_path.exists():
         save_config(DEFAULT_CONFIG)
-        return copy.deepcopy(DEFAULT_CONFIG)
+        return _apply_env_overrides(copy.deepcopy(DEFAULT_CONFIG))
 
     try:
-        with open(CONFIG_PATH, "r", encoding="utf-8") as f:
+        with open(config_path, "r", encoding="utf-8") as f:
             cfg = json.load(f)
             # Merge with defaults to fill missing keys
             merged = copy.deepcopy(DEFAULT_CONFIG)
             merged.update(cfg)
-            return merged
+            return _apply_env_overrides(merged)
     except (json.JSONDecodeError, IOError):
-        return copy.deepcopy(DEFAULT_CONFIG)
+        return _apply_env_overrides(copy.deepcopy(DEFAULT_CONFIG))
 
 
 def save_config(cfg: dict) -> bool:
     """Save config to JSON file."""
     try:
-        with open(CONFIG_PATH, "w", encoding="utf-8") as f:
+        config_path = get_config_path()
+        config_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(config_path, "w", encoding="utf-8") as f:
             json.dump(cfg, f, indent=2, ensure_ascii=False)
         return True
     except IOError:
