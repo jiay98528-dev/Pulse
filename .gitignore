@@ -2,11 +2,15 @@ venv/
 __pycache__/
 *.pyc
 data/
+build/
+dist/
 backend/config.json
 .env
 .DS_Store
 src-tauri/target/
+src-tauri/binaries/*.exe
 src-tauri/gen/
+*.spec
 *.log
 .playwright-mcp/
 audit-*.png
