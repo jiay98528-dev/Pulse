@@ -21,9 +21,13 @@ async def init_db():
                 output_tokens INTEGER DEFAULT 0,
                 cached_tokens INTEGER DEFAULT 0,
                 total_tokens INTEGER DEFAULT 0,
-                cost REAL DEFAULT 0.0
+                cost REAL DEFAULT 0.0,
+                source_file TEXT DEFAULT '',
+                imported_at TEXT DEFAULT ''
             )
         """)
+        await _ensure_column(db, "deepseek_usage", "source_file", "TEXT DEFAULT ''")
+        await _ensure_column(db, "deepseek_usage", "imported_at", "TEXT DEFAULT ''")
         await db.execute("""
             CREATE TABLE IF NOT EXISTS deepseek_balance (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -111,6 +115,15 @@ async def save_usage_records(records: list):
         await db.commit()
 
 
+async def _ensure_column(db, table: str, column: str, definition: str) -> None:
+    """Add a column to an existing SQLite table when older installs lack it."""
+    cursor = await db.execute(f"PRAGMA table_info({table})")
+    rows = await cursor.fetchall()
+    existing = {row[1] for row in rows}
+    if column not in existing:
+        await db.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
+
+
 async def save_balance(balance: float, currency: str = "CNY"):
     """Save Deepseek balance snapshot."""
     async with aiosqlite.connect(DB_PATH) as db:
@@ -128,7 +141,7 @@ async def get_usage_history(days: int = 30, model: Optional[str] = None) -> List
         db.row_factory = aiosqlite.Row
         query = """
             SELECT timestamp, model, input_tokens, output_tokens,
-                   cached_tokens, total_tokens, cost
+                   cached_tokens, total_tokens, cost, source_file, imported_at
             FROM deepseek_usage
             WHERE timestamp >= datetime('now', ? || ' days', 'utc')
         """
@@ -203,23 +216,54 @@ async def import_csv_data(records: list, filename: str) -> int:
         for r in records:
             ts = r.get("timestamp", now)
             md = r.get("model", "unknown")
-            # Dedup: skip if (timestamp, model) already exists
+            source_file = r.get("source_file") or filename
+            imported_at = r.get("imported_at") or now
+            # Dedup: if (timestamp, model) exists and new record has token data
+            # while existing has none (cost-only), UPDATE instead of skipping
             cursor = await db.execute(
-                "SELECT COUNT(*) FROM deepseek_usage WHERE timestamp = ? AND model = ?",
+                "SELECT total_tokens FROM deepseek_usage WHERE timestamp = ? AND model = ?",
                 (ts, md)
             )
             row = await cursor.fetchone()
-            if row and row[0] > 0:
+            new_tokens = r.get("total_tokens", 0)
+            if row:
+                existing_tokens = row[0] or 0
+                if new_tokens > 0 and existing_tokens == 0:
+                    # Enrich cost-only record with token data from amount CSV
+                    await db.execute(
+                        """UPDATE deepseek_usage
+                           SET input_tokens=?, output_tokens=?, cached_tokens=?,
+                               total_tokens=?, cost=MAX(cost,?),
+                               source_file=?, imported_at=?
+                           WHERE timestamp=? AND model=?""",
+                        (
+                            r.get("input_tokens", 0),
+                            r.get("output_tokens", 0),
+                            r.get("cached_tokens", 0),
+                            new_tokens,
+                            r.get("cost", 0.0),
+                            source_file,
+                            imported_at,
+                            ts,
+                            md,
+                        )
+                    )
+                    count += 1
                 continue
             await db.execute(
-                "INSERT INTO deepseek_usage (timestamp, model, input_tokens, output_tokens, cached_tokens, total_tokens, cost) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                """INSERT INTO deepseek_usage
+                   (timestamp, model, input_tokens, output_tokens, cached_tokens,
+                    total_tokens, cost, source_file, imported_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (ts,
                  md,
                  r.get("input_tokens", 0),
                  r.get("output_tokens", 0),
                  r.get("cached_tokens", 0),
                  r.get("total_tokens", 0),
-                 r.get("cost", 0.0))
+                 r.get("cost", 0.0),
+                 source_file,
+                 imported_at)
             )
             count += 1
         await db.execute(

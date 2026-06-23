@@ -84,4 +84,15 @@ class WMIRemoteCollector:
 
     async def test_connection(self) -> dict:
         """Test WMI connection to remote device."""
-        return {"ok": True, "method": "WMI", "status": "not_implemented_in_v2"}
+        import pythoncom
+        try:
+            pythoncom.CoInitialize()
+            try:
+                conn = wmi.WMI(computer=self.host, user=self.username, password=self.password)
+                # Attempt a lightweight query to verify connectivity
+                conn.Win32_OperatingSystem()
+                return {"ok": True, "method": "WMI", "hostname": self.host}
+            finally:
+                pythoncom.CoUninitialize()
+        except Exception as e:
+            return {"ok": False, "method": "WMI", "hostname": self.host, "error": str(e)}

@@ -31,6 +31,8 @@ const state = {
     maxHistoryPoints: 60,
     charts: {},
     pendingCsvFile: null,
+    pendingPairToken: null,
+    lastLimitAlertKey: '',
     config: {},
     netHistory: { timestamps: [], recv: [], sent: [] },
     lastDiskData: null,
@@ -67,8 +69,7 @@ const AI_PROVIDERS = {
 function getBackendBase() {
     const loc = window.location;
     const localHttp = (loc.protocol === 'http:' || loc.protocol === 'https:') &&
-        (loc.hostname === '127.0.0.1' || loc.hostname === 'localhost') &&
-        (!loc.port || loc.port === '8080');
+        (loc.hostname === '127.0.0.1' || loc.hostname === 'localhost');
     return localHttp ? '' : 'http://127.0.0.1:8080';
 }
 
@@ -162,9 +163,10 @@ var WidgetEngine = {
         // Determine if this widget needs a mini chart canvas
         var needsChart = false;
         if (w.type === 'cpu' && w.size === 'S') needsChart = true;
-        if (w.type === 'memory' && w.size === 'S') needsChart = true;
-        if (w.type === 'disk' && w.size === 'M') needsChart = true;
+        if (w.type === 'memory' && (w.size === 'S' || w.size === 'M')) needsChart = true;
+        if (w.type === 'disk' && (w.size === 'M' || w.size === 'L')) needsChart = true;
         if (w.type === 'network' && w.size === 'M') needsChart = true;
+        if (w.type === 'cache') needsChart = true;
 
         var chartHtml = needsChart
             ? '<canvas id="wchart-' + w.id + '" class="widget-chart" style="height:45%;"></canvas>'
@@ -449,8 +451,8 @@ var WidgetEngine = {
                     if (unitEl) unitEl.textContent = '%';
                 }
 
-                // Mini doughnut for S-size
-                if (w.size === 'S' && mem) {
+                // Mini doughnut for S/M-size
+                if ((w.size === 'S' || w.size === 'M') && mem) {
                     var used = mem.used || 0;
                     var avail = mem.available || 0;
                     var chart = this._ensureMiniChart(w, 'wchart-' + w.id, {
@@ -488,8 +490,8 @@ var WidgetEngine = {
                     if (unitEl) unitEl.textContent = '% (' + (disk0.device || disk0.mountpoint || '') + ')';
                 }
 
-                // Mini horizontal bar for M-size
-                if (w.size === 'M' && data.disk && data.disk.length > 0) {
+                // Mini horizontal bar for M/L-size
+                if ((w.size === 'M' || w.size === 'L') && data.disk && data.disk.length > 0) {
                     var partitions = data.disk;
                     var labels = partitions.map(function(d) { return (d.device || d.mountpoint || '?').substring(0, 12); });
                     var values = partitions.map(function(d) { return d.percent || 0; });
@@ -652,19 +654,40 @@ var WidgetEngine = {
                 break;
 
             case 'tokens':
-                // Token data comes from CSV import — placeholder
-                if (data.total_tokens) {
-                    valEl.textContent = formatNumber(data.total_tokens);
-                }
+                valEl.textContent = formatNumber(Number(data.total_tokens) || 0);
                 if (unitEl) unitEl.textContent = 'tokens';
                 break;
 
             case 'cache':
-                if (data.cached_tokens !== undefined) {
-                    var total = (data.total_tokens || data.input_tokens || 0) + (data.output_tokens || 0);
-                    var rate = total > 0 ? (data.cached_tokens / total * 100).toFixed(1) : 0;
-                    valEl.textContent = rate + '%';
-                    if (unitEl) unitEl.textContent = '缓存命中率';
+                var total = Number(data.total_tokens) || 0;
+                var cached = Number(data.cached_tokens) || 0;
+                var rate = total > 0 ? (cached / total * 100).toFixed(1) : '0.0';
+                valEl.textContent = rate + '%';
+                if (unitEl) unitEl.textContent = 'cache hit';
+                var chart = this._ensureMiniChart(w, 'wchart-' + w.id, {
+                    type: 'doughnut',
+                    data: {
+                        labels: ['cache', 'miss'],
+                        datasets: [{
+                            data: total > 0 ? [cached, Math.max(0, total - cached)] : [0, 100],
+                            backgroundColor: [chartColors.red, chartColors.grid],
+                            borderWidth: 0,
+                        }]
+                    },
+                    options: {
+                        animation: false,
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        cutout: '72%',
+                        plugins: {
+                            legend: { display: false },
+                            tooltip: { enabled: false },
+                        },
+                    },
+                });
+                if (chart) {
+                    chart.data.datasets[0].data = total > 0 ? [cached, Math.max(0, total - cached)] : [0, 100];
+                    chart.update('none');
                 }
                 break;
 
@@ -869,14 +892,23 @@ function handleMessage(msg) {
             break;
         case 'pair_request':
             var pr = document.getElementById('pair-overlay');
+            state.pendingPairToken = msg.token || null;
+            var info = document.getElementById('pair-request-info');
+            if (info && msg.from) {
+                info.textContent = (msg.from.name || msg.from.ip || 'LAN device') + ' (' + (msg.from.ip || '-') + ') requests access';
+            }
             if (pr) pr.classList.remove('hidden');
             break;
         case 'pair_success':
             showToast('配对成功', 'success');
+            state.pendingPairToken = null;
             if (typeof loadDevices === 'function') loadDevices();
+            if (typeof loadLanHardwareDevices === 'function') loadLanHardwareDevices();
+            if (typeof loadPlugins === 'function') loadPlugins();
             break;
         case 'pair_rejected':
             showToast('配对被拒绝', 'error');
+            state.pendingPairToken = null;
             break;
         case 'pong':
             break;
@@ -1084,6 +1116,45 @@ function updateDeepseekData(data) {
                 }
             }
         }
+    }
+    updateCostLimitAlert(data);
+}
+
+function updateCostLimitAlert(data) {
+    var limits = data.limits || {};
+    var dailyLimit = Number(limits.daily) || 0;
+    var monthlyLimit = Number(limits.monthly) || 0;
+    var todayCost = Number(data.today_cost) || 0;
+    var monthCost = Number(data.month_cost) || 0;
+    var alerts = [];
+    if (dailyLimit > 0 && todayCost >= dailyLimit * 0.8) {
+        alerts.push('Daily ' + todayCost.toFixed(2) + ' / ' + dailyLimit.toFixed(2));
+    }
+    if (monthlyLimit > 0 && monthCost >= monthlyLimit * 0.8) {
+        alerts.push('Monthly ' + monthCost.toFixed(2) + ' / ' + monthlyLimit.toFixed(2));
+    }
+
+    var balanceEl = $('#accountBalance');
+    var heroKpi = balanceEl ? balanceEl.closest('.hero-kpi') : null;
+    if (!heroKpi) return;
+
+    var alertEl = document.getElementById('ai-cost-limit-alert');
+    if (!alerts.length) {
+        if (alertEl) alertEl.remove();
+        state.lastLimitAlertKey = '';
+        return;
+    }
+    if (!alertEl) {
+        alertEl = document.createElement('div');
+        alertEl.id = 'ai-cost-limit-alert';
+        alertEl.style.cssText = 'margin-top:8px;padding:6px 8px;border:1px solid var(--color-yellow);color:var(--color-yellow);font-family:var(--font-mono);font-size:var(--text-xs);';
+        heroKpi.appendChild(alertEl);
+    }
+    alertEl.textContent = 'AI COST LIMIT WARNING: ' + alerts.join(' | ');
+    var alertKey = alerts.join('|');
+    if (alertKey !== state.lastLimitAlertKey) {
+        showToast('AI cost limit warning: ' + alerts.join(' | '), 'error');
+        state.lastLimitAlertKey = alertKey;
     }
 }
 
@@ -1714,7 +1785,7 @@ function updateAnalysisTable(history) {
     var body = document.getElementById('analysisTableBody');
     if (!body) return;
     if (!Array.isArray(history) || history.length === 0) {
-        body.innerHTML = '<tr><td colspan="7">暂无导入数据</td></tr>';
+        body.innerHTML = '<tr><td colspan="9">暂无导入数据</td></tr>';
         return;
     }
     body.innerHTML = '';
@@ -1727,11 +1798,18 @@ function updateAnalysisTable(history) {
             '<td>' + formatNumber(Number(r.output_tokens) || 0) + '</td>' +
             '<td>' + formatNumber(Number(r.cached_tokens) || 0) + '</td>' +
             '<td>' + formatNumber(Number(r.total_tokens) || 0) + '</td>' +
-            '<td>¥' + (Number(r.cost) || 0).toFixed(4) + '</td>';
+            '<td>¥' + (Number(r.cost) || 0).toFixed(4) + '</td>' +
+            '<td>' + escapeHtml(r.source_file || '—') + '</td>' +
+            '<td>' + escapeHtml(formatImportTime(r.imported_at)) + '</td>';
         body.appendChild(tr);
     });
 }
 
+function formatImportTime(value) {
+    if (!value) return '—';
+    var text = String(value).substring(0, 19).replace('T', ' ');
+    return text || '—';
+}
 function updateRealtimeCharts() {
     // CPU Cores chart
     const cpuChart = state.charts.hwCpuCores;
@@ -1850,6 +1928,18 @@ function showCsvResult(msg, type) {
     }
 }
 
+function updateAnalysisDataSource(source) {
+    var el = document.getElementById('analysis-data-source');
+    if (!el) return;
+    var value = source || localStorage.getItem('pulse-analysis-data-source') || '';
+    if (!value) {
+        el.classList.add('hidden');
+        return;
+    }
+    el.textContent = 'DATA SOURCE: ' + value;
+    el.classList.remove('hidden');
+}
+
 $('#csvImportBtn')?.addEventListener('click', async () => {
     if (!state.pendingCsvFile) return;
 
@@ -1868,6 +1958,17 @@ $('#csvImportBtn')?.addEventListener('click', async () => {
                 msg += ' (未匹配列: ' + result.columns_unmatched.join(', ') + ')';
             }
             showCsvResult(msg, 'success');
+            var sourceParts = [];
+            if (result.files_parsed && result.files_parsed.length) {
+                sourceParts.push(result.files_parsed.join(', '));
+            } else {
+                sourceParts.push(state.pendingCsvFile.name);
+            }
+            sourceParts.push('seen=' + result.records_seen);
+            sourceParts.push('imported=' + result.imported);
+            var sourceLabel = sourceParts.join(' | ');
+            localStorage.setItem('pulse-analysis-data-source', sourceLabel);
+            updateAnalysisDataSource(sourceLabel);
             state.pendingCsvFile = null;
             if ($('#csvPreview')) $('#csvPreview').classList.add('hidden');
             await loadAnalysisData();
@@ -1988,6 +2089,7 @@ function init() {
     initCacheRateChart();
     initCostTrendChart();
     loadAnalysisData();
+    updateAnalysisDataSource();
 
     $('#analysisRangeDays')?.addEventListener('change', loadAnalysisData);
     $('#analysisModelFilter')?.addEventListener('change', loadAnalysisData);
@@ -2133,8 +2235,13 @@ function initAutostartToggle() {
   var cb = document.getElementById("settings-autostart");
   if (!cb) return;
   cb.onchange = function() {
-    if (cb.checked) showToast("Auto-start enabled","info");
-    else showToast("Auto-start disabled","info");
+    if (window.__TAURI__) {
+      if (cb.checked) showToast("开机自启已启用（Tauri）","info");
+      else showToast("开机自启已禁用（Tauri）","info");
+    } else {
+      showToast("开机自启需在 Tauri 桌面版中使用","info");
+      cb.checked = false;
+    }
   };
 }
 
@@ -2170,9 +2277,33 @@ var ThemeEngine = {
         var root = document.documentElement;
         for (var key in tokens) {
             if (tokens.hasOwnProperty(key)) {
-                root.style.setProperty('--' + key, tokens[key]);
+                root.style.setProperty('--' + this._normalizeTokenKey(key), tokens[key]);
             }
         }
+    },
+
+    _normalizeTokenKey: function(key) {
+        var map = {
+            colorPrimary: 'color-red',
+            colorAccent: 'color-yellow',
+            colorBackground: 'color-black',
+            colorSurface: 'color-grey-10',
+            colorText: 'color-white',
+            colorMuted: 'color-grey-50',
+            colorBorder: 'color-grey-30',
+            fontBody: 'font-body',
+            fontMono: 'font-mono',
+            fontHeading: 'font-heading',
+            fontDisplay: 'font-display',
+            textBase: 'text-base',
+            textLarge: 'text-lg',
+            textLg: 'text-lg',
+            text4xl: 'text-4xl',
+            shadowMd: 'shadow-md',
+            borderThick: 'border-thick',
+        };
+        if (map[key]) return map[key];
+        return String(key).replace(/([a-z0-9])([A-Z])/g, '$1-$2').replace(/_/g, '-').toLowerCase();
     },
 
     activate: function(theme) {
@@ -2299,11 +2430,29 @@ function normalizeThemePayload(theme) {
     return theme;
 }
 
-function installThemeFile(file) {
+async function installThemeFile(file) {
     if (!file) return;
     var lower = file.name.toLowerCase();
     if (!lower.endsWith('.pulse-theme') && !lower.endsWith('.json')) {
         showToast('仅支持 .pulse-theme 或 JSON 主题文件', 'error');
+        return;
+    }
+    if (lower.endsWith('.pulse-theme')) {
+        try {
+            var formData = new FormData();
+            formData.append('file', file);
+            var resp = await fetch(apiUrl('/api/theme/import'), {
+                method: 'POST',
+                body: formData,
+            });
+            var result = await resp.json();
+            if (!resp.ok || result.status !== 'ok') {
+                throw new Error(result.detail || 'theme import failed');
+            }
+            ThemeEngine.install(normalizeThemePayload(result.theme));
+        } catch (e) {
+            showToast('主题安装失败: ' + e.message, 'error');
+        }
         return;
     }
     var reader = new FileReader();
@@ -2335,7 +2484,7 @@ function exportThemeFile() {
     var url = URL.createObjectURL(blob);
     var a = document.createElement('a');
     a.href = url;
-    a.download = 'pulse-custom.pulse-theme';
+    a.download = 'pulse-custom-theme.json';
     document.body.appendChild(a);
     a.click();
     a.remove();
@@ -2844,6 +2993,178 @@ function loadDevices() {
   });
 }
 
+async function loadLanHardwareDevices() {
+  var scroll = document.getElementById("hwLanScroll");
+  var empty = document.getElementById("hwLanEmpty");
+  if (!scroll) return;
+  scroll.innerHTML = "<div class=loading-spinner></div>";
+  try {
+    var resp = await fetch(apiUrl("/api/lan/devices"));
+    if (!resp.ok) throw new Error("HTTP " + resp.status);
+    var devices = await resp.json();
+    if (!Array.isArray(devices) || devices.length === 0) {
+      scroll.innerHTML = "";
+      if (empty) empty.classList.remove("hidden");
+      return;
+    }
+    if (empty) empty.classList.add("hidden");
+    scroll.innerHTML = "";
+    devices.forEach(function(device) {
+      var metrics = splitMetrics(device.shared_metrics);
+      var card = document.createElement("button");
+      card.type = "button";
+      card.className = "hw-lan-device-card";
+      card.innerHTML =
+        '<div class="hw-lan-device-head">' +
+          '<span class="hw-lan-device-name">' + escapeHtml(device.name || device.device_id || "LAN Device") + '</span>' +
+          '<span class="hw-lan-device-status ' + (device.online ? "online" : "offline") + '">' + (device.online ? "在线" : "离线") + '</span>' +
+        '</div>' +
+        '<div class="hw-lan-device-ip">' + escapeHtml(device.ip || "-") + '</div>' +
+        '<div class="hw-lan-device-metrics">' + escapeHtml(metrics.length ? metrics.slice(0, 4).join("/") : "未配置") + '</div>' +
+        '<div class="hw-lan-device-foot">点击查看详情</div>';
+      card.addEventListener("click", function() { showLanDeviceDrawer(device); });
+      scroll.appendChild(card);
+    });
+  } catch (e) {
+    scroll.innerHTML = "";
+    if (empty) {
+      empty.textContent = "LAN 设备加载失败";
+      empty.classList.remove("hidden");
+    }
+  }
+}
+
+function showLanDeviceDrawer(device) {
+  var drawer = document.getElementById("lan-device-drawer");
+  if (!drawer) {
+    drawer = document.createElement("div");
+    drawer.id = "lan-device-drawer";
+    drawer.className = "lan-device-drawer hidden";
+    document.body.appendChild(drawer);
+  }
+  destroyLanDrawerCharts();
+  var metrics = splitMetrics(device.shared_metrics);
+  var metricSet = {};
+  metrics.forEach(function(m) { metricSet[m] = true; });
+  drawer.innerHTML =
+    '<div class="lan-drawer-panel">' +
+      '<div class="lan-drawer-header">' +
+        '<div><div class="lan-drawer-title">' + escapeHtml(device.name || device.device_id || "LAN Device") + '</div>' +
+        '<div class="lan-drawer-subtitle">' + escapeHtml(device.ip || "-") + ' · ' + escapeHtml(device.online ? "在线" : "离线") + '</div></div>' +
+        '<button class="btn-secondary" id="lan-device-drawer-close" type="button">×</button>' +
+      '</div>' +
+      '<div class="lan-drawer-meta">' +
+        '<span>LAST UPDATE <strong>' + escapeHtml(formatImportTime(device.last_seen || device.updated_at || device.created_at)) + '</strong></span>' +
+        '<span>TRUST <strong>' + (Number(device.persistent_trust) ? "PERSISTENT" : "TEMP") + '</strong></span>' +
+      '</div>' +
+      '<div class="lan-drawer-chips">' + (metrics.length ? metrics.map(function(m) { return '<span>' + escapeHtml(m) + '</span>'; }).join("") : '<span>NO METRICS</span>') + '</div>' +
+      '<div class="lan-drawer-grid">' +
+        buildLanMetricPanel(device, "cpu", "CPU", metricSet) +
+        buildLanMetricPanel(device, "memory", "MEMORY", metricSet) +
+        buildLanMetricPanel(device, "disk", "DISK", metricSet) +
+        buildLanMetricPanel(device, "network", "NETWORK", metricSet) +
+        buildLanMetricPanel(device, "gpu", "GPU", metricSet) +
+        buildLanMetricPanel(device, "battery", "BATTERY", metricSet) +
+      '</div>' +
+    '</div>';
+  drawer.classList.remove("hidden");
+  drawer.querySelector("#lan-device-drawer-close").onclick = closeLanDeviceDrawer;
+  drawer.addEventListener("click", function(e) {
+    if (e.target === drawer) closeLanDeviceDrawer();
+  }, { once: true });
+  renderLanDrawerCharts(device, metricSet);
+}
+
+function closeLanDeviceDrawer() {
+  destroyLanDrawerCharts();
+  var drawer = document.getElementById("lan-device-drawer");
+  if (drawer) drawer.classList.add("hidden");
+}
+
+function getLanDeviceMetrics(device) {
+  return device.metrics || device.data || device.snapshot || {};
+}
+
+function buildLanMetricPanel(device, key, title, metricSet) {
+  var data = getLanDeviceMetrics(device);
+  var authorized = !!metricSet[key];
+  var hasData = authorized && !!data[key];
+  return '<div class="lan-metric-panel">' +
+    '<div class="lan-metric-title">' + title + '</div>' +
+    (hasData ? '<canvas id="lan-chart-' + key + '"></canvas>' : '<div class="lan-metric-empty">' + (authorized ? "暂无数据" : "未授权") + '</div>') +
+  '</div>';
+}
+
+function renderLanDrawerCharts(device, metricSet) {
+  var data = getLanDeviceMetrics(device);
+  if (metricSet.cpu && data.cpu && document.getElementById("lan-chart-cpu")) {
+    var cpu = Number(data.cpu.percent) || 0;
+    createLanDrawerChart("cpu", "doughnut", ["CPU", "IDLE"], [cpu, Math.max(0, 100 - cpu)]);
+  }
+  if (metricSet.memory && data.memory && document.getElementById("lan-chart-memory")) {
+    var used = Number(data.memory.used_gb || data.memory.used || data.memory.percent) || 0;
+    var total = Number(data.memory.total_gb || data.memory.total) || 100;
+    createLanDrawerChart("memory", "doughnut", ["USED", "FREE"], [used, Math.max(0, total - used)]);
+  }
+  if (metricSet.disk && data.disk && document.getElementById("lan-chart-disk")) {
+    var disks = Array.isArray(data.disk) ? data.disk : [data.disk];
+    createLanDrawerChart("disk", "bar", disks.map(function(d) { return d.mount || d.device || d.mountpoint || "DISK"; }), disks.map(function(d) { return Number(d.percent) || 0; }));
+  }
+  if (metricSet.network && data.network && document.getElementById("lan-chart-network")) {
+    createLanDrawerChart("network", "bar", ["RECV", "SENT"], [Number(data.network.recv_bytes_per_sec) || 0, Number(data.network.sent_bytes_per_sec) || 0]);
+  }
+  if (metricSet.gpu && data.gpu && document.getElementById("lan-chart-gpu")) {
+    var temp = Number(data.gpu.temperature || data.gpu.temp || 0);
+    createLanDrawerChart("gpu", "doughnut", ["TEMP", "HEADROOM"], [temp, Math.max(0, 100 - temp)]);
+  }
+  if (metricSet.battery && data.battery && document.getElementById("lan-chart-battery")) {
+    var pct = Number(data.battery.percent || data.battery.percentage || 0);
+    createLanDrawerChart("battery", "doughnut", ["BATTERY", "EMPTY"], [pct, Math.max(0, 100 - pct)]);
+  }
+}
+
+function createLanDrawerChart(key, type, labels, values) {
+  var canvas = document.getElementById("lan-chart-" + key);
+  if (!canvas) return;
+  var options = {
+    animation: false,
+    responsive: true,
+    maintainAspectRatio: false,
+    plugins: { legend: { display: false }, tooltip: { enabled: false } },
+  };
+  if (type === "bar") {
+    options.scales = {
+      x: { ticks: { color: chartColors.grey, font: { family: "'JetBrains Mono', monospace", size: 9 } }, grid: { color: chartColors.grid } },
+      y: { min: 0, max: key === "network" ? undefined : 100, ticks: { color: chartColors.grey }, grid: { color: chartColors.grid } },
+    };
+  } else {
+    options.cutout = "68%";
+  }
+  if (!state.lanDrawerCharts) state.lanDrawerCharts = {};
+  state.lanDrawerCharts[key] = new Chart(canvas, {
+    type: type,
+    data: {
+      labels: labels,
+      datasets: [{
+        data: values,
+        backgroundColor: type === "bar" ? chartColors.red : [chartColors.red, chartColors.grid],
+        borderColor: chartColors.white,
+        borderWidth: type === "bar" ? 1 : 0,
+        borderRadius: 0,
+      }],
+    },
+    options: options,
+  });
+}
+
+function destroyLanDrawerCharts() {
+  if (!state.lanDrawerCharts) return;
+  Object.keys(state.lanDrawerCharts).forEach(function(key) {
+    if (state.lanDrawerCharts[key]) state.lanDrawerCharts[key].destroy();
+  });
+  state.lanDrawerCharts = {};
+}
+
 function deleteDevice(id) {
   if (!confirm("Delete this device?")) return;
   fetch(apiUrl("/api/devices/" + id), {method:"DELETE"}).then(function() {
@@ -2881,7 +3202,6 @@ function initDeviceForm() {
     document.getElementById("device-form-overlay").classList.add("hidden");
   };
   var addButtons = [
-    document.getElementById("device-add-btn"),
     document.getElementById("hwAddDeviceBtn"),
   ].filter(Boolean);
   addButtons.forEach(function(btn) {
@@ -2920,12 +3240,14 @@ async function createPluginCard(plugin) {
   var card = document.createElement("div");
   card.className = "plugin-card" + (plugin.enabled ? "" : " disabled");
   var pairedCount = "—";
-  if (plugin.name === "LAN 设备监控") {
+  var pairedDevices = [];
+  if (isLanPluginName(plugin.name)) {
     try {
       var pairedResp = await fetch(apiUrl("/api/lan/devices"));
       if (pairedResp.ok) {
         var paired = await pairedResp.json();
-        pairedCount = Array.isArray(paired) ? paired.length : 0;
+        pairedDevices = Array.isArray(paired) ? paired : [];
+        pairedCount = pairedDevices.length;
       }
     } catch (e) {
       pairedCount = "—";
@@ -2933,17 +3255,17 @@ async function createPluginCard(plugin) {
   }
 
   card.innerHTML =
-    "<div class=plugin-card-head>" +
-      "<div>" +
-        "<div class=plugin-title>" + escapeHtml(plugin.name || "Unknown Plugin") + "</div>" +
-        "<div class=plugin-version>v" + escapeHtml(plugin.version || "0.0.0") + "</div>" +
-      "</div>" +
-      "<div class=\"plugin-status " + (plugin.enabled ? "enabled" : "") + "\">" + (plugin.enabled ? "已启用" : "未启用") + "</div>" +
-    "</div>" +
-    "<div class=plugin-desc>" + escapeHtml(plugin.description || "无描述") + "</div>" +
-    "<div class=plugin-meta>已配对设备: <strong>" + pairedCount + "</strong></div>" +
-    "<div class=plugin-actions></div>";
-
+    '<div class="plugin-card-head">' +
+      '<div>' +
+        '<div class="plugin-title">' + escapeHtml(plugin.name || "Unknown Plugin") + '</div>' +
+        '<div class="plugin-version">v' + escapeHtml(plugin.version || "0.0.0") + '</div>' +
+      '</div>' +
+      '<div class="plugin-status ' + (plugin.enabled ? "enabled" : "") + '">' + (plugin.enabled ? "已启用" : "未启用") + '</div>' +
+    '</div>' +
+    '<div class="plugin-desc">' + escapeHtml(plugin.description || "无描述") + '</div>' +
+    '<div class="plugin-meta">已配对设备 <strong>' + pairedCount + '</strong></div>' +
+    (isLanPluginName(plugin.name) ? buildLanPluginDeviceList(pairedDevices) : "") +
+    '<div class="plugin-actions"></div>';
   var actions = card.querySelector(".plugin-actions");
   var toggle = document.createElement("button");
   toggle.className = plugin.enabled ? "btn-secondary" : "btn-primary";
@@ -2954,7 +3276,7 @@ async function createPluginCard(plugin) {
   });
   actions.appendChild(toggle);
 
-  if (plugin.name === "LAN 设备监控" && plugin.enabled) {
+  if (isLanPluginName(plugin.name) && plugin.enabled) {
     var scan = document.createElement("button");
     scan.className = "btn-secondary";
     scan.type = "button";
@@ -2963,9 +3285,92 @@ async function createPluginCard(plugin) {
     actions.appendChild(scan);
   }
 
+  card.querySelectorAll(".lan-metrics-btn").forEach(function(btn) {
+    btn.addEventListener("click", function() {
+      var id = Number(btn.getAttribute("data-device-id"));
+      var device = pairedDevices.find(function(d) { return Number(d.id) === id; });
+      if (device) showLanMetricsConfig(device);
+    });
+  });
+
   return card;
 }
 
+function isLanPluginName(name) {
+  return String(name || "").toUpperCase().indexOf("LAN") !== -1;
+}
+
+function splitMetrics(metrics) {
+  if (Array.isArray(metrics)) return metrics;
+  return String(metrics || "").split(",").map(function(m) { return m.trim(); }).filter(Boolean);
+}
+
+function buildLanPluginDeviceList(devices) {
+  if (!Array.isArray(devices) || devices.length === 0) {
+    return '<div class="lan-paired-list"><div class="lan-paired-title">已配对设备</div><div class="lan-device-empty">暂无配对设备</div></div>';
+  }
+  var html = '<div class="lan-paired-list"><div class="lan-paired-title">已配对设备</div>';
+  devices.forEach(function(d) {
+    var metrics = splitMetrics(d.shared_metrics);
+    var trust = Number(d.persistent_trust) ? "持久信任" : "临时信任";
+    html += '<div class="lan-paired-row">' +
+      '<div class="lan-paired-main">' +
+        '<div class="lan-paired-name">' + escapeHtml(d.name || d.device_id || "LAN Device") + '</div>' +
+        '<div class="lan-paired-ip">' + escapeHtml(d.ip || "") + ' · ' + escapeHtml(d.online ? "在线" : "离线") + ' · ' + escapeHtml(trust) + '</div>' +
+        '<div class="lan-paired-metrics">' + escapeHtml(metrics.length ? metrics.join("/") : "未配置指标") + '</div>' +
+      '</div>' +
+      '<button class="btn-secondary lan-metrics-btn" type="button" data-device-id="' + escapeHtml(String(d.id || "")) + '">配置指标</button>' +
+    '</div>';
+  });
+  html += '</div>';
+  return html;
+}
+
+function showLanMetricsConfig(device) {
+  var overlay = document.getElementById("lan-metrics-overlay");
+  if (!overlay) {
+    overlay = document.createElement("div");
+    overlay.id = "lan-metrics-overlay";
+    overlay.className = "overlay hidden";
+    document.body.appendChild(overlay);
+  }
+  var options = ["cpu", "memory", "disk", "network", "gpu", "battery", "processes"];
+  var selected = splitMetrics(device.shared_metrics);
+  overlay.innerHTML = '<div class="overlay-content lan-metrics-panel">' +
+    '<div class="overlay-header"><h1>共享指标配置</h1><button class="btn-secondary" id="lan-metrics-close" type="button">×</button></div>' +
+    '<div class="lan-metrics-device">' + escapeHtml(device.name || device.device_id || "LAN Device") + ' · ' + escapeHtml(device.ip || "") + '</div>' +
+    '<div class="lan-metrics-options">' + options.map(function(opt) {
+      var checked = selected.indexOf(opt) !== -1 ? " checked" : "";
+      return '<label><input type="checkbox" value="' + opt + '"' + checked + '> <span>' + opt + '</span></label>';
+    }).join("") + '</div>' +
+    '<div class="modal-actions"><button class="btn-secondary" id="lan-metrics-cancel" type="button">取消</button><button class="btn-primary" id="lan-metrics-save" type="button">保存</button></div>' +
+  '</div>';
+  overlay.classList.remove("hidden");
+  overlay.querySelector("#lan-metrics-close").onclick = function() { overlay.classList.add("hidden"); };
+  overlay.querySelector("#lan-metrics-cancel").onclick = function() { overlay.classList.add("hidden"); };
+  overlay.onclick = function(e) { if (e.target === overlay) overlay.classList.add("hidden"); };
+  overlay.querySelector("#lan-metrics-save").onclick = async function() {
+    var values = Array.from(overlay.querySelectorAll('input[type="checkbox"]:checked')).map(function(input) { return input.value; });
+    if (!values.length) {
+      showToast("至少选择一个共享指标", "error");
+      return;
+    }
+    try {
+      var resp = await fetch(apiUrl("/api/lan/devices/" + encodeURIComponent(device.id) + "/metrics"), {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ metrics: values.join(",") }),
+      });
+      if (!resp.ok) throw new Error("HTTP " + resp.status);
+      overlay.classList.add("hidden");
+      showToast("共享指标已保存", "success");
+      await loadPlugins();
+      await loadLanHardwareDevices();
+    } catch (e) {
+      showToast("保存共享指标失败: " + e.message, "error");
+    }
+  };
+}
 async function togglePlugin(name, enable) {
   try {
     var action = enable ? "enable" : "disable";
@@ -2981,6 +3386,7 @@ async function togglePlugin(name, enable) {
 }
 
 async function scanLanDevices() {
+  showLanScan();
   try {
     showToast("正在扫描局域网设备...", "info");
     var resp = await fetch(apiUrl("/api/lan/discover?timeout=3"), { method: "POST" });
@@ -2991,6 +3397,194 @@ async function scanLanDevices() {
   } catch (e) {
     showToast("扫描失败: " + e.message, "error");
   }
+}
+
+// ── Theme Marketplace Popup ────────────────────────────
+function showThemeMarketplace() {
+    var overlay = document.getElementById('theme-marketplace-overlay');
+    if (!overlay) return;
+    overlay.classList.remove('hidden');
+    var grid = document.getElementById('theme-marketplace-grid');
+    var status = document.getElementById('theme-marketplace-status');
+    if (grid && status) {
+        status.textContent = '加载中...';
+        grid.innerHTML = '';
+        loadMarketplaceToGrid(grid, status, document.getElementById('theme-marketplace-empty'));
+    }
+}
+async function loadMarketplaceToGrid(grid, status, empty) {
+    status.textContent = '加载中...';
+    try {
+        var resp = await fetch((window.STORE_API || 'http://127.0.0.1:8081') + '/v1/themes');
+        if (!resp.ok) throw new Error('HTTP ' + resp.status);
+        var themes = await resp.json();
+        grid.innerHTML = '';
+        if (!themes.length) { empty.classList.remove('hidden'); status.textContent = ''; return; }
+        empty.classList.add('hidden');
+        status.textContent = themes.length + ' 个主题可用';
+        themes.forEach(function(t) {
+            var item = document.createElement('div');
+            item.className = 'marketplace-item';
+            var typeLabel = t.type === 'official' ? '官方' : '社区';
+            var badgeClass = t.price > 0 ? 'paid' : 'free';
+            var badgeText = t.price > 0 ? '¥' + t.price : '免费';
+            item.innerHTML = '<div class="marketplace-preview" style="background:#000;border:1px solid #333;">' +
+                '<span style="font-size:24px;">★</span></div>' +
+                '<div class="marketplace-info">' +
+                '<div class="marketplace-name">' + escapeHtml(t.name) + '</div>' +
+                '<div class="marketplace-author">' + escapeHtml(t.author) + ' · ' + typeLabel + '</div>' +
+                '<div class="marketplace-badge ' + badgeClass + '">' + badgeText + '</div></div>';
+            item.addEventListener('click', function() { showThemeDetail(t); });
+            grid.appendChild(item);
+        });
+    } catch (e) {
+        status.textContent = '商店暂不可用（离线模式）';
+        status.style.color = 'var(--color-grey-50)';
+    }
+}
+document.addEventListener('click', function(e) {
+    if (e.target.id === 'theme-marketplace-close') {
+        var overlay = document.getElementById('theme-marketplace-overlay');
+        if (overlay) overlay.classList.add('hidden');
+    }
+});
+
+// ── LAN Scan Popup ─────────────────────────────────────
+function showLanScan() {
+    var overlay = document.getElementById('lan-scan-overlay');
+    if (!overlay) return;
+    overlay.classList.remove('hidden');
+    var results = document.getElementById('lan-scan-results');
+    var status = document.getElementById('lan-scan-status');
+    var timerEl = document.getElementById('lan-scan-timer');
+    var empty = document.getElementById('lan-scan-empty');
+    if (results) results.innerHTML = '';
+    if (empty) empty.classList.add('hidden');
+    var remaining = 5;
+    if (timerEl) timerEl.textContent = remaining;
+    if (status) status.innerHTML = '正在扫描... <span id="lan-scan-timer">5</span>秒';
+    var timer = setInterval(function() {
+        remaining = Math.max(0, remaining - 1);
+        var currentTimer = document.getElementById('lan-scan-timer');
+        if (currentTimer) currentTimer.textContent = remaining;
+    }, 1000);
+
+    fetch(apiUrl('/api/lan/discover?timeout=5'), { method: 'POST' }).then(function(r) {
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        return r.json();
+    }).then(function(data) {
+        clearInterval(timer);
+        if (status) status.innerHTML = '扫描完成 · <a href="#" onclick="showLanScan();return false" style="color:var(--color-red);">重新扫描</a>';
+        var devices = data.devices || [];
+        if (results) results.innerHTML = '';
+        if (!devices.length) {
+            if (empty) empty.classList.remove('hidden');
+            return;
+        }
+        if (empty) empty.classList.add('hidden');
+        devices.forEach(function(d) {
+            var row = document.createElement('div');
+            row.style.cssText = 'display:flex;align-items:center;justify-content:space-between;padding:12px;border:1px solid var(--color-grey-30);background:var(--color-black);';
+            row.innerHTML = '<div><div style="font-family:var(--font-mono);font-size:14px;">' + escapeHtml(d.name || d.hostname) + '</div>' +
+                '<div style="font-size:11px;color:var(--color-grey-50);">' + escapeHtml(d.ip) + '</div></div>' +
+                '<button class="btn-secondary" style="min-height:36px;font-size:12px;" onclick="requestPair(\'' + escapeHtml(d.ip) + '\')">配对</button>';
+            results.appendChild(row);
+        });
+    }).catch(function(e) {
+        clearInterval(timer);
+        if (status) status.textContent = '扫描失败，请确认 LAN 插件已启用';
+        if (empty) empty.classList.remove('hidden');
+    });
+}
+document.addEventListener('click', function(e) {
+    if (e.target.id === 'lan-scan-close') {
+        var overlay = document.getElementById('lan-scan-overlay');
+        if (overlay) overlay.classList.add('hidden');
+    }
+});
+async function requestPair(ip) {
+    try {
+        showToast('Requesting pair with ' + ip + '...', 'info');
+        var resp = await fetch(apiUrl('/api/lan/pair-request'), {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ ip: ip, name: ip }),
+        });
+        var result = await resp.json();
+        if (!resp.ok || result.status === 'error') {
+            throw new Error(result.detail || result.message || 'pair request failed');
+        }
+        if (result.status === 'already_paired') {
+            showToast('Device already paired', 'info');
+        } else if (result.status === 'approved') {
+            showToast('Device approved by persistent trust', 'success');
+        } else {
+            showToast('Pair request sent', 'success');
+        }
+        if (typeof loadPlugins === 'function') loadPlugins();
+    } catch (e) {
+        showToast('Pair request failed: ' + e.message, 'error');
+    }
+}
+
+function initPairingOverlay() {
+    var overlay = document.getElementById('pair-overlay');
+    var persistent = document.getElementById('pair-persistent');
+    var pinGroup = document.getElementById('pair-pin-group');
+    var pinInput = document.getElementById('pair-pin-input');
+    var approve = document.getElementById('pair-approve-btn');
+    var reject = document.getElementById('pair-reject-btn');
+    if (persistent && pinGroup) {
+        persistent.addEventListener('change', function() {
+            pinGroup.classList.toggle('hidden', !persistent.checked);
+        });
+    }
+    if (approve) {
+        approve.addEventListener('click', async function() {
+            if (!state.pendingPairToken) return;
+            try {
+                var resp = await fetch(apiUrl('/api/lan/pair-approve'), {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        token: state.pendingPairToken,
+                        persistent: !!(persistent && persistent.checked),
+                        pin: pinInput ? pinInput.value : '',
+                    }),
+                });
+                var result = await resp.json();
+                if (!resp.ok || result.status === 'error') {
+                    throw new Error(result.detail || result.message || 'approval failed');
+                }
+                if (overlay) overlay.classList.add('hidden');
+                state.pendingPairToken = null;
+                showToast('Pair approved', 'success');
+                if (typeof loadDevices === 'function') loadDevices();
+                if (typeof loadLanHardwareDevices === 'function') loadLanHardwareDevices();
+                if (typeof loadPlugins === 'function') loadPlugins();
+            } catch (e) {
+                showToast('Pair approval failed: ' + e.message, 'error');
+            }
+        });
+    }
+    if (reject) {
+        reject.addEventListener('click', async function() {
+            if (!state.pendingPairToken) {
+                if (overlay) overlay.classList.add('hidden');
+                return;
+            }
+            try {
+                await fetch(apiUrl('/api/lan/pair-reject'), {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ token: state.pendingPairToken }),
+                });
+            } finally {
+                if (overlay) overlay.classList.add('hidden');
+                state.pendingPairToken = null;
+            }
+        });
+    }
 }
 
 // --- Load devices on tab click ---
@@ -3010,9 +3604,15 @@ function initPhase45() {
   initThemeSelector();
   initMarketplaceOnTab();
   initMarketplaceOverlayButtons();
+  initPairingOverlay();
   var hardwareTab = document.querySelector("[data-tab=hardware]");
   if (hardwareTab) {
-    hardwareTab.addEventListener('click', function() { setTimeout(loadDevices, 100); });
+    hardwareTab.addEventListener('click', function() {
+      setTimeout(function() {
+        loadDevices();
+        loadLanHardwareDevices();
+      }, 100);
+    });
   }
   var pluginsTab = document.querySelector("[data-tab=plugins]");
   if (pluginsTab) {

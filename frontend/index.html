@@ -57,6 +57,13 @@
                 <button class="btn-secondary" id="widgetEditBtn">编辑</button>
             </div>
 
+            <!-- AI Balance Hero KPI -->
+            <div class="hero-kpi" id="ai-hero" style="margin-bottom: var(--space-3);">
+                <div class="kpi-value" id="accountBalance" style="font-size: var(--font-kpi); font-family: var(--font-mono); color: var(--color-white);">--</div>
+                <div class="kpi-label" style="font-family: var(--font-heading); font-size: var(--text-xs); text-transform: uppercase; letter-spacing: 0.12em; color: var(--color-grey-50);">AI 余额</div>
+                <div class="kpi-meta" style="font-family: var(--font-mono); font-size: var(--text-xs); color: var(--color-grey-50); margin-top: 4px;"></div>
+            </div>
+
             <!-- Widget Grid -->
             <div class="widget-grid" id="widgetGrid"></div>
 
@@ -79,6 +86,7 @@
             <div class="hw-lan-bar" id="hwLanBar">
                 <div class="hw-lan-header">
                     <span>局域网设备</span>
+                    <button class="btn-primary" onclick="showLanScan()" style="font-size:12px;">扫 描 局 域 网</button>
                     <button class="btn-secondary" id="hwAddDeviceBtn">+ 添加设备</button>
                 </div>
                 <div class="hw-lan-scroll" id="hwLanScroll"></div>
@@ -284,10 +292,12 @@
                                 <th>缓存</th>
                                 <th>总 Token</th>
                                 <th>费用</th>
+                                <th>来源</th>
+                                <th>导入时间</th>
                             </tr>
                         </thead>
                         <tbody id="analysisTableBody">
-                            <tr><td colspan="7">暂无导入数据</td></tr>
+                            <tr><td colspan="9">暂无导入数据</td></tr>
                         </tbody>
                     </table>
                 </div>
@@ -372,6 +382,10 @@
                 <div id="marketplace-empty" class="empty-state hidden">
                     <div class="icon">✦</div>
                     <div class="text">暂无可用主题</div>
+                </div>
+                <div class="form-actions" style="margin-top:12px;">
+                    <button type="button" class="btn-primary" onclick="showThemeMarketplace()">浏 览 全 部 主 题</button>
+                    <span class="hint" style="margin-left:12px;">弹窗展示完整主题市场</span>
                 </div>
             </div>
 
@@ -527,6 +541,44 @@
                     <button type="submit" class="btn-primary">保存设备</button>
                 </div>
             </form>
+        </div>
+    </div>
+
+    <!-- ═══ THEME MARKETPLACE POPUP ═══ -->
+    <div id="theme-marketplace-overlay" class="overlay hidden">
+        <div class="overlay-content" style="min-width:720px;max-width:900px;max-height:85vh;overflow-y:auto;">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px;">
+                <h3>主 题 市 场</h3>
+                <button id="theme-marketplace-close" style="background:none;border:1px solid var(--color-grey-30);color:var(--color-white);padding:8px 16px;cursor:pointer;font-size:18px;">&times;</button>
+            </div>
+            <div id="theme-marketplace-status" style="color:var(--color-grey-50);font-size:12px;margin-bottom:12px;">加载中...</div>
+            <div class="marketplace-grid" id="theme-marketplace-grid"></div>
+            <div id="theme-marketplace-empty" class="empty-state hidden">
+                <div class="icon">✦</div><div class="text">暂无可用主题</div>
+            </div>
+            <div style="margin-top:16px;color:var(--color-grey-50);font-size:11px;">拖入 .pulse-theme 文件可安装社区主题 · 点击主题卡片查看详情或安装</div>
+        </div>
+    </div>
+
+    <!-- ═══ LAN SCAN OVERLAY ═══ -->
+    <div id="lan-scan-overlay" class="overlay hidden">
+        <div class="overlay-content" style="min-width:480px;max-width:640px;">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px;">
+                <h3>扫 描 局 域 网 设 备</h3>
+                <button id="lan-scan-close" style="background:none;border:1px solid var(--color-grey-30);color:var(--color-white);padding:8px 16px;cursor:pointer;font-size:18px;">&times;</button>
+            </div>
+            <div id="lan-scan-status" style="color:var(--color-grey-50);font-size:12px;margin-bottom:16px;text-align:center;">
+                正在扫描... <span id="lan-scan-timer">5</span>秒
+            </div>
+            <div id="lan-scan-results" style="display:flex;flex-direction:column;gap:8px;max-height:400px;overflow-y:auto;">
+                <!-- Discovered devices will appear here -->
+            </div>
+            <div id="lan-scan-empty" class="empty-state hidden">
+                <div class="icon">⚡</div><div class="text">未发现 Pulse 设备</div>
+            </div>
+            <div class="form-actions" style="margin-top:16px;">
+                <span style="color:var(--color-grey-50);font-size:11px;">发现设备后可点击"配对"发起连接 · 需目标设备已安装 Pulse 并启用 LAN 插件</span>
+            </div>
         </div>
     </div>
 

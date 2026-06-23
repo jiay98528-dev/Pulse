@@ -1,13 +1,12 @@
 # PULSE — 项目 TODO
 
-> v1.0: 2026-06-19 (全部完成) | v2.0: 2026-06-21 (M1-M6 全部完成, release ready)
+> v1.0: 2026-06-19 (全部完成) | v2.0: 2026-06-21 (M1-M6 全部完成, 发行就绪)
+> 最后更新: 2026-06-23 | 当前阶段: v2.1 发行验收完成
 
 ---
 
-## ✅ v1.0 全部完成 (5 Phase, 15/15)
-
 <details>
-<summary>点击展开 v1.0 历史</summary>
+<summary>✅ v1.0 全部完成 (5 Phase, 15/15) — 历史参考</summary>
 
 - [x] Phase 1: Git + Memory + 代码扫描
 - [x] Phase 2: API + 前端 + 系统数据验证
@@ -19,9 +18,9 @@
 
 ---
 
-## ⏳ v2.0 里程碑 (设计完成 — 6 里程碑, 38 任务)
+## ✅ v2.0 里程碑 (6 里程碑, 38 任务 — 全部完成)
 
-> 详情: `docs/需求规格说明书_v2.0.md` 第七节
+> 设计权威: `docs/需求规格说明书_v2.0.md` 第七节
 
 | Milestone | 进度 | 状态 |
 |-----------|------|------|
@@ -79,3 +78,44 @@
 - [x] 6.3 邮箱验证码 (6位数字+3分钟有效期+debug模式+恢复已购)
 - [x] 6.4 社区 GitHub PR 自动校验 Action (theme.json格式+文件大小<500KB)
 - [x] 6.5 Pulse 前端对接 (市场网格+主题详情+购买流程+恢复已购+自动安装)
+
+---
+
+## ✅ 发行前审计与修复 (2026-06-21)
+
+### ChatGPT 5.5 发行审计修复
+- [x] CORS 安全加固 (白名单源 + 非本地 Origin 写入拒绝)
+- [x] 路径穿越防护 (双重防御: .. 检测 + resolve.relative_to)
+- [x] HTTP 默认监听 127.0.0.1 (可配置)
+- [x] 静态文件编码穿越返回 404
+- [x] API Key 空值不清空已有配置
+- [x] 按钮触屏热区 ≥ 44px (Surface Go 约束)
+- [x] Tauri 打包修复 (图标生成 + updater 移除 + autostart 适配)
+- [x] 商店后端安全加固 (默认本机监听 + CORS 白名单 + 模拟支付/调试关闭)
+
+### P0~P2 发行阻断修复
+- [x] P0: handleMessage() 增加 pair_request/pair_success/pair_rejected 消息处理
+- [x] P0: CSV 导入 50MB 上限 + asyncio.Semaphore(3) 并发控制
+- [x] P0: autostart --minimized 标志处理 (setup() 调用 window.hide())
+- [x] P0: 持久信任 PIN 从硬编码 0000 改为配置随机生成 6 位
+- [x] P1: WebSocket /ws 增加 Origin 来源验证
+- [x] P1: Deepseek API 错误日志 + 废弃表/配置清理 + 死变量删除
+- [x] P2: 密钥掩码 + webhook 幂等 + timeout 上限 + escapeHtml + utcnow 迁移 + IP 索引 + CSP 收紧
+
+### 验收改进 (用户反馈)
+- [x] Deepseek ZIP 双 CSV 导入 (utc_date 映射 + amount CSV 透视 + 去重覆盖)
+- [x] 费用限额告警 (WebSocket 推送 today_cost/month_cost, 超限红色横幅)
+- [x] 分析页数据来源标记 (导入文件名 + 时间)
+- [x] 主题市场独立弹窗 (配置页 → 浏览全部主题 → 720px 弹窗网格)
+- [x] LAN 扫描可视化窗口 (硬件页 → 扫描局域网 → 5 秒倒计时 + 设备列表 + 配对)
+
+---
+
+## ✅ v2.1 发行验收完成 (2026-06-23)
+
+- [x] 插件页 LAN 插件卡片增强: 已配对设备列表 + 指标配置入口
+- [x] 分析页数据来源列: 每行标注导入文件名/时间
+- [x] 仪表盘 WidgetEngine 统计图表增强: KPI 环形图 + 内存饼图 + 磁盘柱状图
+- [x] 硬件页 LAN 设备抽屉详情: 点击设备卡片展开完整指标图表
+- [x] 浏览器 E2E: Dashboard / Analysis ZIP / Plugins LAN / Hardware LAN drawer / 800px 视口闭环
+- [x] 发行许可与敏感信息审计: Python/Rust 依赖许可证、密钥扫描、gitignored 本机配置检查

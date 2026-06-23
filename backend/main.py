@@ -7,7 +7,7 @@ from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
-from urllib.parse import unquote
+from urllib.parse import unquote, urlparse
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, UploadFile, File, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -77,6 +77,18 @@ ALLOWED_ORIGINS = [
     "https://tauri.localhost",
     "tauri://localhost",
 ]
+
+
+def is_allowed_origin(origin: str) -> bool:
+    """Allow local browser/Tauri origins while rejecting remote write origins."""
+    if not origin:
+        return True
+    if origin in ALLOWED_ORIGINS:
+        return True
+    parsed = urlparse(origin)
+    return parsed.scheme in {"http", "https"} and parsed.hostname in {"127.0.0.1", "localhost"}
+
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=ALLOWED_ORIGINS,
@@ -91,7 +103,7 @@ async def reject_untrusted_write_origins(request: Request, call_next):
     """Reject browser writes from non-local origins before they reach API handlers."""
     if request.url.path.startswith("/api/") and request.method not in {"GET", "HEAD", "OPTIONS"}:
         origin = request.headers.get("origin")
-        if origin and origin not in ALLOWED_ORIGINS:
+        if origin and not is_allowed_origin(origin):
             return JSONResponse({"detail": "Origin not allowed"}, status_code=403)
     return await call_next(request)
 
@@ -215,6 +227,10 @@ async def collect_deepseek_loop():
                         "limits": limits,
                         "today_cost": today_summary.get("total_cost", 0),
                         "month_cost": month_summary.get("total_cost", 0),
+                        "input_tokens": today_summary.get("total_input", 0),
+                        "output_tokens": today_summary.get("total_output", 0),
+                        "cached_tokens": today_summary.get("total_cached", 0),
+                        "total_tokens": today_summary.get("total_tokens", 0),
                     }
                 }
                 await broadcast(json.dumps(msg_data, default=str))
@@ -251,7 +267,7 @@ async def broadcast(message: str):
 @app.websocket("/ws")
 async def websocket_endpoint(ws: WebSocket):
     origin = ws.headers.get("origin", "")
-    if origin and origin not in ALLOWED_ORIGINS:
+    if origin and not is_allowed_origin(origin):
         await ws.close(code=4003, reason="Origin not allowed")
         return
     await ws.accept()
@@ -332,6 +348,7 @@ async def api_update_config(body: dict):
 async def api_get_config():
     """Get current config (keys masked)."""
     cfg = load_config()
+    cfg.pop("lan_trust_pin", None)
     provider = cfg.get("ai_provider", "deepseek")
     configured_providers = {}
     for name in ("deepseek", "openai", "anthropic"):
@@ -342,10 +359,18 @@ async def api_get_config():
             cfg[field] = key[:4] + "*" * (len(key) - 8) + key[-4:]
         elif key:
             cfg[field] = "***"
+    wmi_remote_cfg = cfg.get("wmi_remote")
+    if isinstance(wmi_remote_cfg, dict):
+        wmi_remote_cfg = dict(wmi_remote_cfg)
+        password = wmi_remote_cfg.get("password", "")
+        wmi_remote_cfg["password"] = "***" if password else ""
+        wmi_remote_cfg["password_configured"] = bool(password)
+        cfg["wmi_remote"] = wmi_remote_cfg
     return {
         **cfg,
         "configured": configured_providers.get(provider, False),
         "configured_providers": configured_providers,
+        "lan_trust_pin_configured": bool(load_config().get("lan_trust_pin", "")),
     }
 
 
@@ -497,6 +522,7 @@ def _pivot_deepseek_amount_df(df: pd.DataFrame) -> pd.DataFrame:
 
 
 MAX_CSV_SIZE = 50 * 1024 * 1024  # 50MB
+MAX_THEME_PACKAGE_SIZE = 10 * 1024 * 1024  # 10MB
 _csv_import_semaphore = asyncio.Semaphore(3)
 
 
@@ -509,7 +535,8 @@ async def api_csv_import(file: UploadFile = File(...)):
     if suffix not in {".csv", ".zip"}:
         raise HTTPException(400, "Only CSV and ZIP files are supported")
 
-    try:
+    async with _csv_import_semaphore:
+        try:
             content = await file.read()
             if len(content) > MAX_CSV_SIZE:
                 raise HTTPException(413, f"File too large (max {MAX_CSV_SIZE // (1024*1024)}MB)")
@@ -517,11 +544,15 @@ async def api_csv_import(file: UploadFile = File(...)):
             matched: set[str] = set()
             unmatched: set[str] = set(CSV_COLUMN_MAP.keys())
             parsed_files = []
+            imported_at = datetime.now(timezone.utc).isoformat()
 
             if suffix == ".csv":
                 df = pd.read_csv(io.BytesIO(content))
                 df = _pivot_deepseek_amount_df(df)
                 parsed, file_matched, file_unmatched = _records_from_dataframe(df)
+                for record in parsed:
+                    record["source_file"] = file.filename
+                    record["imported_at"] = imported_at
                 records.extend(parsed)
                 matched.update(file_matched)
                 unmatched.intersection_update(file_unmatched)
@@ -536,6 +567,10 @@ async def api_csv_import(file: UploadFile = File(...)):
                             df = pd.read_csv(csv_file)
                             df = _pivot_deepseek_amount_df(df)
                         parsed, file_matched, file_unmatched = _records_from_dataframe(df)
+                        source_file = Path(name.replace("\\", "/")).name
+                        for record in parsed:
+                            record["source_file"] = source_file
+                            record["imported_at"] = imported_at
                         records.extend(parsed)
                         matched.update(file_matched)
                         unmatched.intersection_update(file_unmatched)
@@ -552,10 +587,63 @@ async def api_csv_import(file: UploadFile = File(...)):
                 "columns_unmatched": sorted(unmatched),
             }
 
+        except HTTPException:
+            raise
+        except Exception as e:
+            raise HTTPException(400, f"CSV parse error: {str(e)}")
+
+
+@app.post("/api/theme/import")
+async def api_theme_import(file: UploadFile = File(...)):
+    """Import a .pulse-theme ZIP package and return its theme payload."""
+    if not file.filename:
+        raise HTTPException(400, "A .pulse-theme file is required")
+    if Path(file.filename).suffix.lower() != ".pulse-theme":
+        raise HTTPException(400, "Only .pulse-theme packages are supported")
+
+    content = await file.read()
+    if len(content) > MAX_THEME_PACKAGE_SIZE:
+        raise HTTPException(413, f"Theme package too large (max {MAX_THEME_PACKAGE_SIZE // (1024*1024)}MB)")
+
+    try:
+        with zipfile.ZipFile(io.BytesIO(content)) as zf:
+            names = {name.replace("\\", "/"): name for name in zf.namelist()}
+            theme_name = names.get("theme.json")
+            if not theme_name:
+                theme_name = next((original for normalized, original in names.items()
+                                   if normalized.endswith("/theme.json")), None)
+            if not theme_name:
+                raise HTTPException(400, "Theme package must contain theme.json")
+
+            if zf.getinfo(theme_name).file_size > 1024 * 1024:
+                raise HTTPException(413, "theme.json is too large")
+            with zf.open(theme_name) as theme_file:
+                theme = json.loads(theme_file.read().decode("utf-8-sig"))
+
+            css_name = names.get("custom.css")
+            if not css_name:
+                css_name = next((original for normalized, original in names.items()
+                                 if normalized.endswith("/custom.css")), None)
+            if css_name:
+                if zf.getinfo(css_name).file_size > 256 * 1024:
+                    raise HTTPException(413, "custom.css is too large")
+                with zf.open(css_name) as css_file:
+                    theme["customCSS"] = css_file.read().decode("utf-8-sig")
     except HTTPException:
         raise
+    except zipfile.BadZipFile:
+        raise HTTPException(400, "Invalid .pulse-theme ZIP package")
     except Exception as e:
-        raise HTTPException(400, f"CSV parse error: {str(e)}")
+        raise HTTPException(400, f"Theme import error: {str(e)}")
+
+    if not isinstance(theme, dict) or not isinstance(theme.get("tokens"), dict):
+        raise HTTPException(400, "theme.json must include a tokens object")
+
+    theme.setdefault("id", Path(file.filename).stem)
+    theme.setdefault("name", theme["id"])
+    theme.setdefault("author", "Local")
+    theme.setdefault("type", "custom")
+    return {"status": "ok", "theme": theme}
 
 
 @app.get("/api/system/current")
@@ -774,7 +862,38 @@ async def api_lan_devices_list():
     except HTTPException:
         # Plugin disabled — return empty list
         return []
-    return await pm.get_paired_devices()
+    devices = await pm.get_paired_devices()
+    now = datetime.now(timezone.utc).isoformat()
+    local_snapshot = latest_system_data or collect_system_data()
+    for device in devices:
+        device.setdefault("online", False)
+        device.setdefault("last_seen", device.get("created_at") or "")
+        if device.get("device_id") == "self":
+            device["online"] = True
+            device["last_seen"] = now
+            device["metrics"] = normalize_lan_metrics(local_snapshot)
+    return devices
+
+
+def normalize_lan_metrics(snapshot: dict) -> dict:
+    """Map local system collector output to the LAN peer metric contract."""
+    memory = snapshot.get("memory") or {}
+    network = snapshot.get("network_speed") or {}
+    gpu_list = snapshot.get("gpu") or []
+    gpu = gpu_list[0] if isinstance(gpu_list, list) and gpu_list else {}
+    battery = snapshot.get("battery") or {}
+    return {
+        "cpu": snapshot.get("cpu") or {},
+        "memory": memory,
+        "disk": snapshot.get("disk") or [],
+        "network": {
+            "recv_bytes_per_sec": network.get("recv_per_sec", 0),
+            "sent_bytes_per_sec": network.get("sent_per_sec", 0),
+        },
+        "gpu": gpu,
+        "battery": battery,
+        "processes": snapshot.get("processes") or [],
+    }
 
 
 @app.put("/api/lan/devices/{device_id}/metrics")
@@ -829,6 +948,15 @@ def _get_reconnect_manager():
         import database as db_mod
         rm = ReconnectManager(db_mod)
         rm.set_ws_clients(connected_clients)
+        # Wire up default callback: push notification when a trusted device is discovered
+        async def _on_trusted_device_found(device_info: dict):
+            msg = json.dumps({
+                "type": "reconnect_device_found",
+                "device": device_info,
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            }, default=str)
+            await broadcast(msg)
+        rm.set_on_device_online(_on_trusted_device_found)
         lan_plugin._reconnect_manager = rm
     return rm
 

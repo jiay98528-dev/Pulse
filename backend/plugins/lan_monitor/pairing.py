@@ -12,7 +12,6 @@
 """
 
 import json
-import random
 import secrets
 import time
 from datetime import datetime, timezone
@@ -22,14 +21,6 @@ from config import load_config, save_config
 
 # 配对请求过期时间（秒）
 PENDING_REQUEST_TTL = 120
-
-# 存储待处理的配对请求（内存中）
-# { token: { ip, name, device_id, timestamp } }
-_pending_requests: dict[str, dict] = {}
-
-# PairingManager 引用（用于访问数据库）
-_manager_instance = None
-
 
 class PairingManager:
     """LAN 设备配对管理器。
@@ -47,12 +38,10 @@ class PairingManager:
         self._pending_requests: dict[str, dict] = {}
         # 持久信任 PIN（从配置文件读取，不存在则随机生成并持久化）
         cfg = load_config()
-        self._trust_pin = cfg.get("lan_trust_pin", "") or str(random.randint(100000, 999999))
+        self._trust_pin = cfg.get("lan_trust_pin", "") or f"{secrets.randbelow(900000) + 100000:06d}"
         if not cfg.get("lan_trust_pin"):
             cfg["lan_trust_pin"] = self._trust_pin
             save_config(cfg)
-        global _manager_instance
-        _manager_instance = self
         self._connected_ws_clients: set = set()
 
     def set_ws_clients(self, clients_set: set):
