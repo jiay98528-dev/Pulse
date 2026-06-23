@@ -1,0 +1,143 @@
+/* ═══════════════════════════════════════════════════════
+   地中海陶土 — 组件级 UI 重构
+   Mediterranean Terracotta — Component-level restyle
+   ═══════════════════════════════════════════════════════ */
+
+/* ═══ Tab Pill Capsule ═══ */
+.tab-btn {
+  border-radius: 24px !important;
+  border: 1px solid var(--color-grey-30) !important;
+  background: transparent !important;
+  color: var(--color-grey-70) !important;
+  padding: 6px 20px !important;
+  font-size: 13px;
+  letter-spacing: 0.04em;
+  min-height: 36px;
+  font-family: var(--font-body) !important;
+  text-transform: none !important;
+  box-shadow: none !important;
+  transition: all var(--duration-fast) ease;
+}
+.tab-btn:hover {
+  background: var(--color-grey-20) !important;
+  color: var(--color-white) !important;
+}
+.tab-btn.active {
+  background: var(--color-red) !important;
+  color: #FFF !important;
+  border-color: var(--color-red) !important;
+  box-shadow: 0 2px 8px rgba(198,123,92,0.25) !important;
+  font-weight: 600;
+}
+
+/* ═══ Cards: hairline border + soft shadow ═══ */
+.card, .analysis-kpi, .widget-card, .plugin-card,
+.settings-card, .hw-banner, .hw-lan-bar, .device-card,
+.lan-metric-panel, .marketplace-item, .restore-theme-item {
+  border-radius: 10px !important;
+  border: 1px solid var(--color-grey-30) !important;
+  box-shadow: 0 2px 12px rgba(59,46,34,0.06) !important;
+  transition: box-shadow var(--duration-fast) ease;
+}
+.card:hover {
+  box-shadow: 0 4px 20px rgba(59,46,34,0.10) !important;
+}
+
+/* ═══ Buttons: rounded pills ═══ */
+.btn-primary, .btn-secondary, .csv-btn, .form-btn,
+button.btn-primary, button.btn-secondary {
+  border-radius: 24px !important;
+  padding: 8px 24px !important;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  font-family: var(--font-body) !important;
+  text-transform: none !important;
+  box-shadow: 0 2px 8px rgba(198,123,92,0.15) !important;
+  transition: all var(--duration-fast) ease;
+  min-height: 44px;
+}
+.btn-primary:hover, .btn-secondary:hover, .csv-btn:hover, .form-btn:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 16px rgba(198,123,92,0.22) !important;
+}
+.btn-primary:active, .btn-secondary:active, .csv-btn:active, .form-btn:active {
+  transform: translateY(0);
+}
+.btn-primary {
+  background: var(--color-red) !important;
+  color: #FFF !important;
+  border-color: var(--color-red) !important;
+}
+.btn-secondary {
+  background: transparent !important;
+  color: var(--color-red) !important;
+  border-color: var(--color-red) !important;
+}
+
+/* ═══ Inputs: rounded ═══ */
+.form-input, .overlay-content input, .settings-card input,
+.form-group input, .csv-upload-area, textarea {
+  border-radius: 10px !important;
+  border: 1px solid var(--color-grey-30) !important;
+  background: var(--color-black) !important;
+  color: var(--color-white) !important;
+  padding: 10px 14px !important;
+}
+
+/* ═══ Linen texture background ═══ */
+body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  opacity: 0.04;
+  background-image:
+    repeating-linear-gradient(0deg, transparent, transparent 1px,
+      rgba(139,119,90,0.3) 1px, rgba(139,119,90,0.3) 2px),
+    repeating-linear-gradient(90deg, transparent, transparent 1px,
+      rgba(139,119,90,0.2) 1px, rgba(139,119,90,0.2) 2px);
+}
+
+/* ═══ Titlebar softened ═══ */
+#titlebar {
+  background: #E8DFD2 !important;
+  border-bottom: 1px solid var(--color-grey-30) !important;
+}
+
+/* ═══ Widget values: terracotta accent ═══ */
+.widget-value {
+  color: var(--color-red) !important;
+  font-weight: 700;
+}
+
+/* ═══ Tables ═══ */
+.analysis-table th, .analysis-table td {
+  border-color: var(--color-grey-30) !important;
+  font-family: var(--font-mono);
+}
+.analysis-table th {
+  background: var(--color-grey-20) !important;
+  color: var(--color-grey-70) !important;
+  font-family: var(--font-heading) !important;
+  text-transform: none !important;
+  font-weight: 600;
+}
+
+/* ═══ LAN device cards ═══ */
+.hw-lan-device-card {
+  border-radius: 10px !important;
+  box-shadow: 0 2px 12px rgba(59,46,34,0.06) !important;
+}
+
+/* ═══ Overlays ═══ */
+.overlay-content {
+  border-radius: 12px !important;
+  box-shadow: 0 8px 40px rgba(59,46,34,0.12) !important;
+}
+
+/* ═══ Toast ═══ */
+.toast {
+  border-radius: 10px !important;
+  box-shadow: 0 4px 16px rgba(59,46,34,0.10) !important;
+}

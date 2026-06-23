@@ -2275,6 +2275,44 @@ var ThemeEngine = {
                 this._applyTokens(parsed);
             } catch(e) {}
         }
+        // Auto-discover local theme files
+        this._discoverLocal();
+    },
+
+    _discoverLocal: function() {
+        var self = this;
+        var LOCAL_THEMES = [
+            { id: 'mediterranean', path: 'themes/mediterranean/theme.json' },
+            { id: 'editorial', path: 'themes/editorial/theme.json' },
+        ];
+        LOCAL_THEMES.forEach(function(entry) {
+            if (self.installedThemes[entry.id]) return; // already known
+            fetch(entry.path)
+                .then(function(r) { if (!r.ok) throw new Error('not found'); return r.json(); })
+                .then(function(theme) {
+                    theme.id = entry.id;
+                    theme._localPath = entry.path;
+                    self.installedThemes[entry.id] = theme;
+                    localStorage.setItem('pulse-installed-themes', JSON.stringify(self.installedThemes));
+                    self._populateSelector();
+                })
+                .catch(function() { /* theme file not accessible */ });
+        });
+    },
+
+    _populateSelector: function() {
+        var sel = document.getElementById('theme-selector');
+        if (!sel) return;
+        // Keep the default option, rebuild the rest
+        while (sel.options.length > 1) sel.remove(1);
+        var self = this;
+        Object.keys(this.installedThemes).forEach(function(id) {
+            var theme = self.installedThemes[id];
+            var opt = document.createElement('option');
+            opt.value = id;
+            opt.textContent = (theme.name || id) + (theme._localPath ? ' [本地]' : '');
+            sel.appendChild(opt);
+        });
     },
 
     _applyTokens: function(tokens) {
@@ -2913,15 +2951,24 @@ function initThemeSelector() {
         if (val === 'builtin-constructivist') {
             ThemeEngine.resetToDefault();
         } else if (ThemeEngine.installedThemes[val]) {
-            fetch(STORE_API + '/v1/themes/' + val)
-                .then(function(r) { return r.json(); })
-                .then(function(theme) { ThemeEngine.activate(theme); })
-                .catch(function() {
-                    showToast('无法重新加载主题', 'error');
-                    ThemeEngine.resetToDefault();
-                });
+            var theme = ThemeEngine.installedThemes[val];
+            // Local themes: load customCSS from separate file if available
+            if (theme._localPath) {
+                var cssPath = theme._localPath.replace('theme.json', 'custom.css');
+                fetch(cssPath)
+                    .then(function(r) { return r.ok ? r.text() : Promise.resolve(''); })
+                    .catch(function() { return ''; })
+                    .then(function(css) {
+                        if (css) theme.customCSS = css;
+                        ThemeEngine.activate(theme);
+                    });
+            } else {
+                ThemeEngine.activate(theme);
+            }
         }
     });
+    // Populate with already-discovered local themes
+    ThemeEngine._populateSelector();
 }
 
 function initMarketplaceOnTab() {
