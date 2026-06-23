@@ -9,6 +9,7 @@ $ErrorActionPreference = "Stop"
 $RepoRoot = Resolve-Path (Join-Path $PSScriptRoot "..")
 $Python = Join-Path $RepoRoot "venv\Scripts\python.exe"
 $SidecarScript = Join-Path $PSScriptRoot "build-backend-sidecar.ps1"
+$TauriConfigPath = Join-Path $RepoRoot "src-tauri\tauri.conf.json"
 
 function Invoke-Step {
     param(
@@ -29,6 +30,7 @@ function Assert-File {
 
 Assert-File $Python
 Assert-File $SidecarScript
+Assert-File $TauriConfigPath
 
 Push-Location $RepoRoot
 try {
@@ -70,10 +72,12 @@ try {
 
     Write-Host ""
     Write-Host "==> Release artifacts"
+    $tauriConfig = Get-Content -Raw -LiteralPath $TauriConfigPath | ConvertFrom-Json
+    $version = $tauriConfig.version
     $artifactGlobs = @(
         "src-tauri/target/release/pulse.exe",
-        "src-tauri/target/release/bundle/msi/*.msi",
-        "src-tauri/target/release/bundle/nsis/*.exe"
+        "src-tauri/target/release/bundle/msi/Pulse_$($version)_*.msi",
+        "src-tauri/target/release/bundle/nsis/Pulse_$($version)_*.exe"
     )
     foreach ($glob in $artifactGlobs) {
         Get-ChildItem -Path $glob -ErrorAction SilentlyContinue | ForEach-Object {
