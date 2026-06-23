@@ -1,4 +1,4 @@
-/* ══════════════════════════════════════════════════
+﻿/* ══════════════════════════════════════════════════
    PULSE — App Core
    实时数据看板 · WebSocket + Charts + UI
    ══════════════════════════════════════════════════ */
@@ -28,18 +28,24 @@ const state = {
     connected: false,
     systemHistory: { cpu: [], mem: [], timestamps: [] },
     tokenHistory: [],
-    maxHistoryPoints: 60,
+    maxHistoryPoints: 180,
     charts: {},
     pendingCsvFile: null,
     pendingPairToken: null,
     lastLimitAlertKey: '',
     config: {},
+    latestSystemData: null,
+    latestDeepseekData: null,
     netHistory: { timestamps: [], recv: [], sent: [] },
     lastDiskData: null,
     lastCpuPerCore: null,
     lastMemData: null,
     lastGpuTemp: null,
     lastBatteryData: null,
+    activeTab: 'dashboard',
+    setupRequired: true,
+    deepseekConfigured: false,
+    tabReloadState: {},
 };
 
 const AI_PROVIDERS = {
@@ -95,8 +101,10 @@ var WidgetEngine = {
     widgetIdCounter: 0,
     activeWidgets: [],
     isEditing: false,
-    layoutKey: 'pulse-widget-layout',
+    layoutKey: 'pulse-ui-layout-v3',
+    legacyLayoutKey: 'pulse-widget-layout',
     _widgetCharts: {},
+    _dragHandlers: null,
     _cpuHistory: {},
     _netRecvHistory: {},
     _netSentHistory: {},
@@ -113,6 +121,13 @@ var WidgetEngine = {
 
     loadLayout: function() {
         var raw = localStorage.getItem(this.layoutKey);
+        if (!raw) {
+            var legacy = localStorage.getItem(this.legacyLayoutKey);
+            if (legacy) {
+                raw = legacy;
+                localStorage.setItem(this.layoutKey, raw);
+            }
+        }
         if (raw) {
             try {
                 var parsed = JSON.parse(raw);
@@ -155,6 +170,9 @@ var WidgetEngine = {
 
         var el = document.createElement('div');
         el.className = 'widget size-' + w.size;
+        if (spec.source === 'deepseek' && !state.deepseekConfigured) {
+            el.classList.add('widget-locked');
+        }
         el.setAttribute('data-id', w.id);
         el.setAttribute('draggable', 'true');
 
@@ -343,12 +361,14 @@ var WidgetEngine = {
             var item = document.createElement('div');
             item.className = 'widget-lib-item';
             if (addedTypes[type]) item.classList.add('added');
+            if (spec.source === 'deepseek' && !state.deepseekConfigured) item.classList.add('requires-config');
 
             var sizesStr = spec.sizes.join('/');
+            var suffix = (spec.source === 'deepseek' && !state.deepseekConfigured) ? ' · 需要 API key' : '';
 
             item.innerHTML =
                 '<span class="wli-icon">' + spec.icon + '</span>' +
-                '<span class="wli-name">' + spec.name + ' (' + sizesStr + ')</span>';
+                '<span class="wli-name">' + spec.name + ' (' + sizesStr + ')' + suffix + '</span>';
 
             if (!addedTypes[type]) {
                 item.addEventListener('click', function(t) {
@@ -642,23 +662,41 @@ var WidgetEngine = {
                 break;
 
             case 'balance':
+                if (!state.deepseekConfigured || data.needs_config) {
+                    valEl.textContent = '未配置';
+                    if (unitEl) unitEl.textContent = '需要 API key';
+                    valEl.classList.add('widget-value-muted');
+                    break;
+                }
                 var bal = data.balance;
                 if (bal) {
+                    valEl.classList.remove('widget-value-muted');
                     var balVal = bal.total_balance || bal.balance || 0;
                     valEl.textContent = formatCurrency(Number(balVal));
                     if (unitEl) unitEl.textContent = bal.currency || 'CNY';
-                } else if (data.needs_config) {
-                    valEl.textContent = '未配置';
-                    if (unitEl) unitEl.textContent = '';
                 }
                 break;
 
             case 'tokens':
+                if (!state.deepseekConfigured || data.needs_config) {
+                    valEl.textContent = '锁定';
+                    if (unitEl) unitEl.textContent = '需要 API key';
+                    valEl.classList.add('widget-value-muted');
+                    break;
+                }
+                valEl.classList.remove('widget-value-muted');
                 valEl.textContent = formatNumber(Number(data.total_tokens) || 0);
                 if (unitEl) unitEl.textContent = 'tokens';
                 break;
 
             case 'cache':
+                if (!state.deepseekConfigured || data.needs_config) {
+                    valEl.textContent = '锁定';
+                    if (unitEl) unitEl.textContent = '需要 API key';
+                    valEl.classList.add('widget-value-muted');
+                    break;
+                }
+                valEl.classList.remove('widget-value-muted');
                 var total = Number(data.total_tokens) || 0;
                 var cached = Number(data.cached_tokens) || 0;
                 var rate = total > 0 ? (cached / total * 100).toFixed(1) : '0.0';
@@ -704,44 +742,53 @@ var WidgetEngine = {
         }
     },
 
+
     _initDragDrop: function(grid) {
         var self = this;
-        grid.addEventListener('dragover', function(e) {
-            if (!self.isEditing) return;
-            e.preventDefault();
-            e.dataTransfer.dropEffect = 'move';
-        });
+        if (!this._dragHandlers) {
+            this._dragHandlers = {
+                dragover: function(e) {
+                    if (!self.isEditing) return;
+                    e.preventDefault();
+                    e.dataTransfer.dropEffect = 'move';
+                },
+                drop: function(e) {
+                    if (!self.isEditing) return;
+                    e.preventDefault();
+                    var fromId = e.dataTransfer.getData('text/plain');
+                    if (!fromId) return;
 
-        grid.addEventListener('drop', function(e) {
-            if (!self.isEditing) return;
-            e.preventDefault();
-            var fromId = e.dataTransfer.getData('text/plain');
-            if (!fromId) return;
+                    var target = e.target;
+                    // Walk up to find the widget element
+                    while (target && target !== grid) {
+                        if (target.classList.contains('widget')) break;
+                        target = target.parentElement;
+                    }
+                    if (!target || target === grid) return;
 
-            var target = e.target;
-            // Walk up to find the widget element
-            while (target && target !== grid) {
-                if (target.classList.contains('widget')) break;
-                target = target.parentElement;
-            }
-            if (!target || target === grid) return;
+                    var toId = target.getAttribute('data-id');
+                    if (!toId || fromId === toId) return;
 
-            var toId = target.getAttribute('data-id');
-            if (!toId || fromId === toId) return;
+                    // Find indices and reorder
+                    var fromIdx = -1, toIdx = -1;
+                    for (var i = 0; i < self.activeWidgets.length; i++) {
+                        if (self.activeWidgets[i].id === fromId) fromIdx = i;
+                        if (self.activeWidgets[i].id === toId) toIdx = i;
+                    }
+                    if (fromIdx < 0 || toIdx < 0) return;
 
-            // Find indices and reorder
-            var fromIdx = -1, toIdx = -1;
-            for (var i = 0; i < self.activeWidgets.length; i++) {
-                if (self.activeWidgets[i].id === fromId) fromIdx = i;
-                if (self.activeWidgets[i].id === toId) toIdx = i;
-            }
-            if (fromIdx < 0 || toIdx < 0) return;
+                    var item = self.activeWidgets.splice(fromIdx, 1)[0];
+                    self.activeWidgets.splice(toIdx, 0, item);
+                    self.renderAll();
+                    self.saveLayout();
+                }
+            };
+        }
 
-            var item = self.activeWidgets.splice(fromIdx, 1)[0];
-            self.activeWidgets.splice(toIdx, 0, item);
-            self.renderAll();
-            self.saveLayout();
-        });
+        grid.removeEventListener('dragover', this._dragHandlers.dragover);
+        grid.removeEventListener('drop', this._dragHandlers.drop);
+        grid.addEventListener('dragover', this._dragHandlers.dragover);
+        grid.addEventListener('drop', this._dragHandlers.drop);
     },
 
     init: function() {
@@ -834,6 +881,172 @@ function getWsUrl() {
     return scheme + '://' + host + '/ws';
 }
 
+// ── Dashboard Telemetry Canvas Controller ────────────
+var DashboardTelemetryController = {
+    initialized: false,
+    charts: {},
+    history: {
+        labels: [],
+        cpu: [],
+        mem: [],
+        disk: [],
+        net: [],
+        aiTokens: [],
+        aiCost: [],
+        cacheRate: [],
+        freshness: [],
+    },
+
+    init: function() {
+        if (this.initialized) return;
+        if (!window.TelemetryCanvas || !TelemetryCanvas.create) return;
+
+        this.charts.heroAi = this._create('heroAiCanvas', 'costCache', { max: 100 });
+        this.charts.heroSystem = this._create('heroSystemCanvas', 'radial', { min: 0, max: 100 });
+        this.charts.heroFreshness = this._create('heroFreshnessCanvas', 'heatStrip', { min: 0, max: 100 });
+        this.charts.systemStream = this._create('dashboardSystemStream', 'usageStream', { min: 0, max: 100 });
+        this.charts.usageStream = this._create('dashboardUsageStream', 'usageStream', {});
+        this.charts.heatStrip = this._create('dashboardHeatStrip', 'heatStrip', { min: 0, max: 100 });
+
+        this.initialized = true;
+        this.refresh();
+    },
+
+    _create: function(id, type, options) {
+        var canvas = document.getElementById(id);
+        if (!canvas) return null;
+        return TelemetryCanvas.create(canvas, {
+            type: type,
+            labels: [],
+            datasets: [],
+            options: options || {},
+        });
+    },
+
+    _push: function(key, value) {
+        if (!this.history[key]) this.history[key] = [];
+        var n = Number(value);
+        this.history[key].push(Number.isFinite(n) ? n : 0);
+        if (this.history[key].length > state.maxHistoryPoints) this.history[key].shift();
+    },
+
+    _pushLabel: function() {
+        this.history.labels.push(new Date().toLocaleTimeString());
+        if (this.history.labels.length > state.maxHistoryPoints) this.history.labels.shift();
+    },
+
+    updateSystem: function(data) {
+        if (!data) return;
+        this.init();
+
+        var cpu = Number(data.cpu && data.cpu.percent) || 0;
+        var mem = Number(data.memory && data.memory.percent) || 0;
+        var disk = Number(data.disk && data.disk[0] && data.disk[0].percent) || 0;
+        var net = data.network_speed
+            ? Math.min(100, ((Number(data.network_speed.recv_per_sec) || 0) + (Number(data.network_speed.sent_per_sec) || 0)) / (1024 * 1024) * 8)
+            : 0;
+        var load = Math.max(cpu, mem, disk);
+
+        this._pushLabel();
+        this._push('cpu', cpu);
+        this._push('mem', mem);
+        this._push('disk', disk);
+        this._push('net', net);
+        this._push('freshness', 100);
+
+        var loadEl = document.getElementById('heroSystemLoad');
+        if (loadEl) loadEl.textContent = Math.round(load) + '%';
+        var freshEl = document.getElementById('heroFreshness');
+        if (freshEl) freshEl.textContent = 'LIVE';
+
+        this.refresh();
+    },
+
+    updateDeepseek: function(data) {
+        this.init();
+        data = data || {};
+
+        var totalTokens = Number(data.total_tokens || data.today_tokens || 0) || 0;
+        var cost = Number(data.today_cost || data.month_cost || data.total_cost || 0) || 0;
+        var cached = Number(data.cached_tokens || data.total_cached || 0) || 0;
+        var cacheRate = totalTokens > 0 ? cached / totalTokens * 100 : 0;
+
+        this._push('aiTokens', totalTokens);
+        this._push('aiCost', cost);
+        this._push('cacheRate', cacheRate);
+
+        if (!state.deepseekConfigured || data.needs_config) {
+            var balanceEl = document.getElementById('accountBalance');
+            if (balanceEl) balanceEl.textContent = '未配置';
+            var heroKpi = balanceEl ? balanceEl.closest('.hero-kpi') : null;
+            var metaEl = heroKpi ? heroKpi.querySelector('.kpi-meta') : null;
+            if (metaEl) metaEl.textContent = '需要配置 API key';
+        }
+
+        this.refresh();
+    },
+
+    refresh: function() {
+        this.init();
+        var labels = this.history.labels.length ? this.history.labels.slice() : [''];
+        var cpu = this.history.cpu.length ? this.history.cpu.slice() : [0];
+        var mem = this.history.mem.length ? this.history.mem.slice() : [0];
+        var disk = this.history.disk.length ? this.history.disk.slice() : [0];
+        var net = this.history.net.length ? this.history.net.slice() : [0];
+        var tokens = this.history.aiTokens.length ? this.history.aiTokens.slice() : [0];
+        var cost = this.history.aiCost.length ? this.history.aiCost.slice() : [0];
+        var cache = this.history.cacheRate.length ? this.history.cacheRate.slice() : [0];
+        var freshness = this.history.freshness.length ? this.history.freshness.slice() : [12, 24, 36];
+
+        this._setData('heroAi', labels, [
+            { label: 'Cost', data: cost, borderColor: chartColors.yellow },
+            { label: 'Cache', data: cache, borderColor: chartColors.red },
+        ], state.deepseekConfigured ? 'AI telemetry' : 'API key required');
+
+        var currentLoad = Math.max(cpu[cpu.length - 1] || 0, mem[mem.length - 1] || 0, disk[disk.length - 1] || 0);
+        this._setData('heroSystem', ['load'], [
+            { label: 'Load', data: [currentLoad], borderColor: chartColors.green },
+        ], 'System load');
+
+        this._setData('heroFreshness', labels, [
+            { label: 'Freshness', data: freshness, borderColor: chartColors.green },
+        ], 'Data freshness');
+
+        this._setData('systemStream', labels, [
+            { label: 'CPU', data: cpu, borderColor: chartColors.red },
+            { label: 'Memory', data: mem, borderColor: chartColors.green },
+            { label: 'Disk', data: disk, borderColor: chartColors.yellow },
+        ], 'System stream');
+
+        this._setData('usageStream', labels, [
+            { label: 'Tokens', data: tokens, borderColor: chartColors.red },
+            { label: 'Cost', data: cost, borderColor: chartColors.yellow },
+            { label: 'Cache', data: cache, borderColor: chartColors.green },
+        ], state.deepseekConfigured ? 'AI usage' : 'API key required');
+
+        this._setData('heatStrip', labels, [
+            { label: 'Pressure', data: cpu.map(function(v, i) {
+                return Math.max(v || 0, mem[i] || 0, disk[i] || 0, net[i] || 0);
+            }), borderColor: chartColors.red },
+        ], 'Pressure');
+    },
+
+    _setData: function(key, labels, datasets, label) {
+        var chart = this.charts[key];
+        if (!chart) return;
+        chart.setData({ labels: labels, datasets: datasets });
+        chart.setState({ label: label });
+    },
+
+    resize: function() {
+        this.init();
+        Object.values(this.charts).forEach(function(chart) {
+            if (chart && chart.resize) chart.resize();
+        });
+        this.refresh();
+    },
+};
+
 // ── WebSocket ────────────────────────────────────────
 function connectWs() {
     if (state.ws && state.ws.readyState === WebSocket.OPEN) return;
@@ -886,15 +1099,13 @@ function handleMessage(msg) {
             WidgetEngine.updateAll('system', msg.data);
             break;
         case 'deepseek':
+            state.latestDeepseekData = msg.data || null;
+            if (msg.data && msg.data.needs_config === true) {
+                state.deepseekConfigured = false;
+                updateSetupNotice(false);
+            }
             updateDeepseekData(msg.data);
             WidgetEngine.updateAll('deepseek', msg.data);
-            if (msg.data.needs_config === true) {
-                WidgetEngine.setVisibility('balance', false);
-                WidgetEngine.setVisibility('tokens', false);
-                WidgetEngine.setVisibility('cache', false);
-                WidgetEngine.renderAll();
-                WidgetEngine.saveLayout();
-            }
             break;
         case 'pair_request':
             var pr = document.getElementById('pair-overlay');
@@ -920,28 +1131,106 @@ function handleMessage(msg) {
 }
 
 // ── Tab Switching ────────────────────────────────────
-$$('.tab-btn').forEach(btn => {
-    btn.addEventListener('click', () => {
-        const tab = btn.dataset.tab;
-        // Update button states
-        $$('.tab-btn').forEach(b => b.classList.remove('active'));
-        btn.classList.add('active');
-        // Update content
-        $$('.tab-content').forEach(c => c.classList.remove('active'));
-        const target = $('#tab-' + tab);
-        if (target) target.classList.add('active');
-        // Resize charts when switching to a tab with charts
-        setTimeout(() => {
-            Object.values(state.charts).forEach(c => {
-                if (c && c.resize) c.resize();
-            });
-        }, 100);
+const VALID_TABS = ['dashboard', 'hardware', 'analysis', 'settings', 'plugins'];
+
+function normalizeTab(tab) {
+    tab = String(tab || '').replace(/^#/, '').replace(/^tab-/, '').trim();
+    return VALID_TABS.indexOf(tab) >= 0 ? tab : 'dashboard';
+}
+
+function getInitialTab() {
+    var params = new URLSearchParams(window.location.search || '');
+    var fromQuery = params.get('tab');
+    if (fromQuery) return normalizeTab(fromQuery);
+    var fromHash = window.location.hash || '';
+    if (fromHash) return normalizeTab(fromHash);
+    return 'dashboard';
+}
+
+function syncTabUrl(tab) {
+    var url = new URL(window.location.href);
+    url.searchParams.set('tab', tab);
+    url.hash = '';
+    window.history.replaceState({ tab: tab }, '', url.toString());
+}
+
+function resizeVisibleCharts() {
+    Object.values(state.charts).forEach(function(c) {
+        if (c && c.resize) c.resize();
+        if (c && c.update) c.update('none');
     });
-});
+    if (WidgetEngine && WidgetEngine._widgetCharts) {
+        Object.values(WidgetEngine._widgetCharts).forEach(function(c) {
+            if (c && c.resize) c.resize();
+            if (c && c.update) c.update('none');
+        });
+    }
+    if (DashboardTelemetryController && DashboardTelemetryController.resize) {
+        DashboardTelemetryController.resize();
+    }
+    if (window.TelemetryCanvas && TelemetryCanvas.refreshTheme) {
+        TelemetryCanvas.refreshTheme();
+    }
+}
+
+function refreshTabData(tab) {
+    if (tab === 'dashboard') {
+        if (state.latestSystemData) DashboardTelemetryController.updateSystem(state.latestSystemData);
+        if (state.latestDeepseekData) DashboardTelemetryController.updateDeepseek(state.latestDeepseekData);
+        WidgetEngine.updateAll('deepseek', state.latestDeepseekData || { needs_config: !state.deepseekConfigured });
+    } else if (tab === 'hardware') {
+        updateRealtimeCharts();
+        setTimeout(function() {
+            Promise.all([loadDevices(), loadLanHardwareDevices()]);
+        }, 100);
+    } else if (tab === 'analysis') {
+        if (state.tokenHistory && state.tokenHistory.length && state.charts.historyTrend) {
+            loadAnalysisData();
+        } else {
+            loadAnalysisData();
+        }
+    } else if (tab === 'plugins') {
+        setTimeout(loadPlugins, 100);
+    }
+}
+
+function activateTab(tab, options) {
+    tab = normalizeTab(tab);
+    options = options || {};
+    state.activeTab = tab;
+
+    $$('.tab-btn').forEach(function(btn) {
+        btn.classList.toggle('active', btn.dataset.tab === tab);
+    });
+    $$('.tab-content').forEach(function(content) {
+        content.classList.toggle('active', content.id === 'tab-' + tab);
+    });
+
+    if (options.syncUrl) syncTabUrl(tab);
+    refreshTabData(tab);
+    setTimeout(resizeVisibleCharts, 80);
+    setTimeout(resizeVisibleCharts, 220);
+}
+
+function initTabNavigation() {
+    $$('.tab-btn').forEach(function(btn) {
+        btn.addEventListener('click', function() {
+            activateTab(btn.dataset.tab, { syncUrl: true });
+        });
+    });
+    window.addEventListener('popstate', function() {
+        activateTab(getInitialTab(), { syncUrl: false });
+    });
+    window.addEventListener('hashchange', function() {
+        activateTab(getInitialTab(), { syncUrl: false });
+    });
+    activateTab(getInitialTab(), { syncUrl: false });
+}
 
 // ── System Data Update ───────────────────────────────
 function updateSystemData(data) {
     if (!data) return;
+    state.latestSystemData = data;
 
     const cpu = data.cpu?.percent ?? 0;
     const mem = data.memory?.percent ?? 0;
@@ -1094,12 +1383,15 @@ function updateSystemData(data) {
         state.systemHistory.timestamps.shift();
     }
 
+    DashboardTelemetryController.updateSystem(data);
     updateRealtimeCharts();
 }
 
 // ── Deepseek Data Update ─────────────────────────────
 function updateDeepseekData(data) {
     if (!data) return;
+    state.latestDeepseekData = data;
+    if (data.needs_config === true) state.deepseekConfigured = false;
     // Balance
     var balance = data.balance;
     if (balance) {
@@ -1121,6 +1413,7 @@ function updateDeepseekData(data) {
             }
         }
     }
+    DashboardTelemetryController.updateDeepseek(data);
     updateCostLimitAlert(data);
 }
 
@@ -1986,18 +2279,20 @@ $('#csvImportBtn')?.addEventListener('click', async () => {
 
 // ── Settings ─────────────────────────────────────────
 
-// Auto-hide AI widgets when no API key configured
+// Keep AI widgets visible, but render them as locked when no API key is configured.
 async function checkAiWidgets() {
     try {
         var resp = await fetch(apiUrl('/api/config'));
         var cfg = await resp.json();
         var providers = cfg.configured_providers || {};
-        var configured = !!providers.deepseek;
-        WidgetEngine.setVisibility('balance', configured);
-        WidgetEngine.setVisibility('tokens', configured);
-        WidgetEngine.setVisibility('cache', configured);
+        state.deepseekConfigured = !!providers.deepseek;
+        updateSetupNotice(!!cfg.configured);
         WidgetEngine.renderAll();
-        WidgetEngine.saveLayout();
+        if (state.latestDeepseekData) {
+            WidgetEngine.updateAll('deepseek', state.latestDeepseekData);
+        } else {
+            WidgetEngine.updateAll('deepseek', { needs_config: !state.deepseekConfigured });
+        }
     } catch (e) {
         /* silently ignore */
     }
@@ -2031,6 +2326,8 @@ async function loadConfig() {
         const resp = await fetch(apiUrl('/api/config'));
         state.config = await resp.json();
         const cfg = state.config;
+        state.deepseekConfigured = !!(cfg.configured_providers && cfg.configured_providers.deepseek);
+        updateSetupNotice(!!cfg.configured);
 
         renderProviderSettings(cfg.ai_provider || 'deepseek');
         if ($('#settings-daily-limit')) $('#settings-daily-limit').value = cfg.daily_spending_limit || 5;
@@ -2056,7 +2353,10 @@ async function saveConfig(body, statusEl) {
                 statusEl.className = 'form-status success';
                 setTimeout(() => { statusEl.textContent = ''; }, 3000);
             }
-            loadConfig(); // Refresh
+            loadConfig().then(function() {
+                checkAiWidgets();
+                DashboardTelemetryController.updateDeepseek(state.latestDeepseekData || { needs_config: !state.deepseekConfigured });
+            }); // Refresh
         } else {
             if (statusEl) {
                 statusEl.textContent = '✕ 保存失败';
@@ -2092,6 +2392,8 @@ function init() {
     initModelBreakdownChart();
     initCacheRateChart();
     initCostTrendChart();
+    DashboardTelemetryController.init();
+    initTabNavigation();
     loadAnalysisData();
     updateAnalysisDataSource();
 
@@ -2102,6 +2404,10 @@ function init() {
 
     // Connect WebSocket
     connectWs();
+
+    window.addEventListener('resize', function() {
+        setTimeout(resizeVisibleCharts, 80);
+    });
 
     // Periodic ping
     setInterval(() => {
@@ -2163,16 +2469,42 @@ function showToast(msg, type) {
 }
 
 // --- First-run Setup ---
+function updateSetupNotice(configured) {
+  var banner = document.getElementById("setup-banner");
+  var overlay = document.getElementById("setup-overlay");
+  var dismissed = sessionStorage.getItem("pulse-setup-banner-dismissed") === "1";
+  state.setupRequired = !configured;
+  if (overlay) overlay.classList.add("hidden");
+  if (!banner) return;
+  if (configured || dismissed) banner.classList.add("hidden");
+  else banner.classList.remove("hidden");
+}
+
 function checkFirstRun() {
   fetch(apiUrl("/api/config")).then(function(r) { return r.json(); }).then(function(cfg) {
-    if (cfg.configured) {
-      var el = document.getElementById("setup-overlay");
-      if (el) el.classList.add("hidden");
-    } else {
-      var el = document.getElementById("setup-overlay");
-      if (el) el.classList.remove("hidden");
-    }
+    state.config = cfg;
+    state.deepseekConfigured = !!(cfg.configured_providers && cfg.configured_providers.deepseek);
+    updateSetupNotice(!!cfg.configured);
   }).catch(function(e) { console.warn("[Pulse] First-run check:", e); });
+}
+
+function initSetupBanner() {
+  var dismiss = document.getElementById("setup-banner-dismiss");
+  var settings = document.getElementById("setup-banner-settings");
+  if (dismiss) {
+    dismiss.onclick = function() {
+      sessionStorage.setItem("pulse-setup-banner-dismissed", "1");
+      updateSetupNotice(false);
+    };
+  }
+  if (settings) {
+    settings.onclick = function() {
+      sessionStorage.removeItem("pulse-setup-banner-dismissed");
+      activateTab("settings", { syncUrl: true });
+      var keyEl = document.getElementById("settings-api-key");
+      if (keyEl) setTimeout(function() { keyEl.focus(); }, 120);
+    };
+  }
 }
 
 // --- Setup Form ---
@@ -2254,29 +2586,228 @@ function initAutostartToggle() {
 //  JSON→CSS变量→图表重绘
 // ══════════════════════════════════════════════════
 const STORE_API = 'http://127.0.0.1:8081'; // 商店后端地址
+const STORE_OFFLINE_MESSAGE = '主题商店离线，请启动 127.0.0.1:8081 服务后重试。';
+
+async function storeFetch(path, options) {
+    try {
+        return await fetch(STORE_API + path, options);
+    } catch (e) {
+        var err = new Error(STORE_OFFLINE_MESSAGE);
+        err.cause = e;
+        err.storeOffline = true;
+        throw err;
+    }
+}
+
+function showStoreOffline(status, detail) {
+    if (status) {
+        status.textContent = detail || STORE_OFFLINE_MESSAGE;
+        status.style.color = 'var(--signal-warn, var(--color-yellow))';
+    }
+}
 
 var ThemeEngine = {
     activeThemeId: null,
     installedThemes: {},
+    schemaVersion: 3,
+    defaultThemeId: 'builtin-telemetry-ops',
+    layoutKey: 'pulse-ui-layout-v3',
+    legacyLayoutKey: 'pulse-widget-layout',
 
     init: function() {
-        var saved = localStorage.getItem('pulse-active-theme-id');
-        if (saved) {
-            this.activeThemeId = saved;
+        var builtins = this._builtinThemes();
+        for (var i = 0; i < builtins.length; i++) {
+            this._registerTheme(this._normalizeThemePayload(builtins[i], 'builtin'), true);
         }
-        var installed = localStorage.getItem('pulse-installed-themes');
-        if (installed) {
-            try { this.installedThemes = JSON.parse(installed); } catch(e) {}
-        }
-        var tokens = localStorage.getItem('pulse-theme-tokens');
-        if (tokens) {
-            try {
-                var parsed = JSON.parse(tokens);
-                this._applyTokens(parsed);
-            } catch(e) {}
-        }
-        // Auto-discover local theme files
+
+        this._loadInstalledThemes();
+        this._migrateLegacyLayout();
         this._discoverLocal();
+        this._populateSelector();
+
+        var rawTokens = localStorage.getItem('pulse-theme-tokens');
+        var rawLegacyTokens = localStorage.getItem('pulse-theme-legacy-tokens');
+        var activeId = localStorage.getItem('pulse-active-theme-id') || this.defaultThemeId;
+        var legacySchema = parseInt(localStorage.getItem('pulse-theme-schema-version'), 10);
+        var customCSS = localStorage.getItem('pulse-theme-custom-css') || '';
+        var activeTheme = this.installedThemes[activeId];
+
+        if (rawTokens) {
+            try {
+                var parsed = JSON.parse(rawTokens);
+                var payload = {
+                    id: activeId,
+                    name: (activeTheme && activeTheme.name) || 'Custom Theme',
+                    author: (activeTheme && activeTheme.author) || 'Local',
+                    type: (activeTheme && activeTheme.type) || 'custom',
+                    schemaVersion: legacySchema || this.schemaVersion,
+                    legacyCompatible: localStorage.getItem('pulse-theme-legacy-compatible') === '1',
+                    tokens: parsed,
+                    legacyTokens: rawLegacyTokens ? JSON.parse(rawLegacyTokens) : null,
+                    customCSS: customCSS,
+                };
+                this.activate(this._normalizeThemePayload(payload, 'stored'));
+                return;
+            } catch (e) {}
+        }
+
+        if (activeTheme) {
+            this.activate(this._normalizeThemePayload(activeTheme, 'stored'));
+        } else {
+            this.activate(this._normalizeThemePayload(this._builtinThemes()[0], 'default'));
+        }
+    },
+
+    _builtinThemes: function() {
+        return [
+            {
+                id: 'builtin-telemetry-ops',
+                name: 'Telemetry Ops',
+                author: 'Pulse Team',
+                type: 'official',
+                schemaVersion: 3,
+                legacyCompatible: true,
+                tokens: {
+                    surface: {
+                        base: 'oklch(14% 0.015 250)',
+                        panel: 'oklch(19% 0.018 250)',
+                        panel2: 'oklch(23% 0.022 250)',
+                        elevated: 'oklch(28% 0.025 250)',
+                        line: 'oklch(38% 0.035 250)',
+                        hairline: 'oklch(42% 0.04 250 / 0.38)',
+                    },
+                    text: {
+                        primary: 'oklch(93% 0.008 250)',
+                        secondary: 'oklch(73% 0.018 250)',
+                        muted: 'oklch(58% 0.02 250)',
+                    },
+                    signal: {
+                        primary: 'oklch(72% 0.16 205)',
+                        ai: 'oklch(76% 0.17 305)',
+                        system: 'oklch(74% 0.15 155)',
+                        warn: 'oklch(82% 0.16 85)',
+                        danger: 'oklch(66% 0.2 25)',
+                    },
+                    chart: {
+                        grid: 'oklch(32% 0.025 250 / 0.7)',
+                        glow: 'oklch(72% 0.16 205 / 0.26)',
+                    },
+                    motion: {
+                        fast: '100ms',
+                        normal: '200ms',
+                        slow: '280ms',
+                    },
+                    canvas: {
+                        glow: 'oklch(72% 0.16 205 / 0.2)',
+                    },
+                },
+                legacyTokens: {
+                    'color-red': 'oklch(66% 0.2 25)',
+                    'color-black': 'oklch(14% 0.015 250)',
+                    'color-white': 'oklch(93% 0.008 250)',
+                    'color-grey-10': 'oklch(19% 0.018 250)',
+                    'color-grey-20': 'oklch(23% 0.022 250)',
+                    'color-grey-30': 'oklch(38% 0.035 250)',
+                    'color-grey-50': 'oklch(58% 0.02 250)',
+                    'color-grey-70': 'oklch(73% 0.018 250)',
+                    'color-yellow': 'oklch(82% 0.16 85)',
+                    'color-green': 'oklch(74% 0.15 155)',
+                }
+            },
+            {
+                id: 'builtin-constructivist',
+                name: '苏维埃构成主义（历史）',
+                author: 'Pulse Team',
+                type: 'legacy-official',
+                schemaVersion: 1,
+                legacyCompatible: true,
+                tokens: {
+                    surface: {
+                        base: '#000000',
+                        panel: '#1A1A1A',
+                        panel2: '#222222',
+                        elevated: '#4D4D4D',
+                        line: '#990000',
+                        hairline: '#CC0000',
+                    },
+                    text: {
+                        primary: '#FFFFFF',
+                        secondary: '#B3B3B3',
+                        muted: '#808080',
+                    },
+                    signal: {
+                        primary: '#990000',
+                        ai: '#FF0000',
+                        system: '#00AA44',
+                        warn: '#FFD700',
+                        danger: '#CC0000',
+                    },
+                    chart: {
+                        grid: '#333333',
+                        glow: '#CC0000',
+                    },
+                    motion: {
+                        fast: '100ms',
+                        normal: '200ms',
+                        slow: '280ms',
+                    },
+                    canvas: {
+                        glow: '#CC0000',
+                    },
+                },
+                legacyTokens: {
+                    'color-red': '#CC0000',
+                    'color-black': '#000000',
+                    'color-white': '#FFFFFF',
+                    'color-grey-10': '#1A1A1A',
+                    'color-grey-20': '#222222',
+                    'color-grey-30': '#4D4D4D',
+                    'color-grey-50': '#808080',
+                    'color-grey-70': '#B3B3B3',
+                    'color-yellow': '#FFD700',
+                    'color-green': '#2D8A2D',
+                },
+            }
+        ];
+    },
+
+    _migrateLegacyLayout: function() {
+        var hasNew = localStorage.getItem(this.layoutKey);
+        if (!hasNew) {
+            var legacy = localStorage.getItem(this.legacyLayoutKey);
+            if (legacy) localStorage.setItem(this.layoutKey, legacy);
+        }
+    },
+
+    _loadInstalledThemes: function() {
+        var installed = localStorage.getItem('pulse-installed-themes');
+        if (!installed) return;
+        try {
+            var parsed = JSON.parse(installed);
+            var self = this;
+            Object.keys(parsed).forEach(function(id) {
+                if (!parsed[id] || typeof parsed[id] !== 'object') return;
+                parsed[id].id = parsed[id].id || id;
+                self._registerTheme(self._normalizeThemePayload(parsed[id], 'installed'), !!parsed[id].builtin);
+            });
+        } catch (e) {}
+    },
+
+    _registerTheme: function(theme, isBuiltin) {
+        if (!theme || !theme.id) return;
+        if (!theme.name) theme.name = theme.id;
+        if (!theme.author) theme.author = 'Local';
+        if (!theme.type) theme.type = isBuiltin ? 'official' : 'custom';
+        if (!theme._localPath) delete theme._localPath;
+        theme.builtin = !!isBuiltin || !!theme.builtin;
+        theme.installedAt = theme.installedAt || Date.now();
+        if (typeof theme.schemaVersion !== 'number') theme.schemaVersion = this.schemaVersion;
+        this.installedThemes[theme.id] = theme;
+        this._persistInstalledThemes();
+    },
+
+    _persistInstalledThemes: function() {
+        localStorage.setItem('pulse-installed-themes', JSON.stringify(this.installedThemes));
     },
 
     _discoverLocal: function() {
@@ -2286,42 +2817,88 @@ var ThemeEngine = {
             { id: 'editorial', path: 'themes/editorial/theme.json' },
         ];
         LOCAL_THEMES.forEach(function(entry) {
-            if (self.installedThemes[entry.id]) return; // already known
+            if (self.installedThemes[entry.id]) return;
             fetch(entry.path)
                 .then(function(r) { if (!r.ok) throw new Error('not found'); return r.json(); })
                 .then(function(theme) {
                     theme.id = entry.id;
                     theme._localPath = entry.path;
-                    self.installedThemes[entry.id] = theme;
-                    localStorage.setItem('pulse-installed-themes', JSON.stringify(self.installedThemes));
+                    self._registerTheme(self._normalizeThemePayload(theme, 'local'), false);
                     self._populateSelector();
                 })
-                .catch(function() { /* theme file not accessible */ });
+                .catch(function() {});
         });
     },
 
     _populateSelector: function() {
         var sel = document.getElementById('theme-selector');
         if (!sel) return;
-        // Keep the default option, rebuild the rest
         while (sel.options.length > 1) sel.remove(1);
         var self = this;
         Object.keys(this.installedThemes).forEach(function(id) {
             var theme = self.installedThemes[id];
+            if (!theme) return;
             var opt = document.createElement('option');
             opt.value = id;
-            opt.textContent = (theme.name || id) + (theme._localPath ? ' [本地]' : '');
+            opt.textContent = (theme.name || id) + (theme.legacyCompatible ? ' (Legacy)' : '') + (theme._localPath ? ' [本地]' : '');
             sel.appendChild(opt);
         });
+        if (this.activeThemeId) sel.value = this.activeThemeId;
+    },
+
+    _syncLegacyAliases: function() {
+        var root = document.documentElement;
+        var aliases = {
+            'color-red': 'signal-danger',
+            'color-black': 'surface-base',
+            'color-white': 'text-primary',
+            'color-grey-10': 'surface-panel',
+            'color-grey-20': 'surface-panel2',
+            'color-grey-30': 'surface-line',
+            'color-grey-50': 'text-muted',
+            'color-grey-70': 'text-secondary',
+            'color-yellow': 'signal-warn',
+            'color-green': 'signal-system',
+        };
+        Object.keys(aliases).forEach(function(alias) {
+            var value = getComputedStyle(root).getPropertyValue('--' + aliases[alias]).trim();
+            if (value) root.style.setProperty('--' + alias, value);
+        });
+    },
+
+    _flattenTokens: function(tokens) {
+        var flat = {};
+        var groups = {
+            surface: ['base', 'panel', 'panel2', 'elevated', 'line', 'hairline'],
+            text: ['primary', 'secondary', 'muted'],
+            signal: ['primary', 'ai', 'system', 'warn', 'danger'],
+            chart: ['grid', 'glow'],
+            motion: ['fast', 'normal', 'slow'],
+            canvas: ['glow'],
+        };
+        if (!tokens || typeof tokens !== 'object') tokens = {};
+        Object.keys(groups).forEach(function(group) {
+            var source = tokens[group];
+            if (!source || typeof source !== 'object') return;
+            for (var i = 0; i < groups[group].length; i++) {
+                var key = groups[group][i];
+                if (source[key] !== undefined) {
+                    flat[group + '-' + key] = source[key];
+                }
+            }
+        });
+        return flat;
     },
 
     _applyTokens: function(tokens) {
         var root = document.documentElement;
-        for (var key in tokens) {
-            if (tokens.hasOwnProperty(key)) {
-                root.style.setProperty('--' + this._normalizeTokenKey(key), tokens[key]);
+        var flat = this._flattenTokens(tokens);
+        for (var key in flat) {
+            if (flat.hasOwnProperty(key)) {
+                root.style.setProperty('--' + this._normalizeTokenKey(key), flat[key]);
             }
         }
+        this._syncLegacyAliases();
     },
 
     _normalizeTokenKey: function(key) {
@@ -2333,97 +2910,298 @@ var ThemeEngine = {
             colorText: 'color-white',
             colorMuted: 'color-grey-50',
             colorBorder: 'color-grey-30',
+            surfaceBase: 'surface-base',
+            surfacePanel: 'surface-panel',
+            surfacePanel2: 'surface-panel2',
+            surfaceElevated: 'surface-elevated',
+            surfaceLine: 'surface-line',
+            surfaceHairline: 'surface-hairline',
+            textPrimary: 'text-primary',
+            textSecondary: 'text-secondary',
+            textMuted: 'text-muted',
+            signalPrimary: 'signal-primary',
+            signalAi: 'signal-ai',
+            signalSystem: 'signal-system',
+            signalWarn: 'signal-warn',
+            signalDanger: 'signal-danger',
+            chartGrid: 'chart-grid',
+            chartGlow: 'chart-glow',
+            durationFast: 'duration-fast',
+            durationNormal: 'duration-normal',
+            durationSlow: 'duration-slow',
             fontBody: 'font-body',
-            fontMono: 'font-mono',
             fontHeading: 'font-heading',
-            fontDisplay: 'font-display',
+            fontMono: 'font-mono',
             textBase: 'text-base',
-            textLarge: 'text-lg',
             textLg: 'text-lg',
             text4xl: 'text-4xl',
-            shadowMd: 'shadow-md',
-            borderThick: 'border-thick',
         };
         if (map[key]) return map[key];
         return String(key).replace(/([a-z0-9])([A-Z])/g, '$1-$2').replace(/_/g, '-').toLowerCase();
     },
 
-    activate: function(theme) {
-        var root = document.documentElement;
-        if (theme.tokens) {
-            this._applyTokens(theme.tokens);
-            localStorage.setItem('pulse-theme-tokens', JSON.stringify(theme.tokens));
+    _normalizeThemePayload: function(rawTheme, _source) {
+        if (!rawTheme || typeof rawTheme !== 'object') {
+            throw new Error('theme invalid');
         }
+
+        var theme = {
+            id: String(rawTheme.id || ('custom-' + Date.now())),
+            name: rawTheme.name || rawTheme.id || 'Custom Theme',
+            author: rawTheme.author || 'Local',
+            type: rawTheme.type || 'custom',
+            schemaVersion: Number(rawTheme.schemaVersion) || this.schemaVersion,
+            installedAt: rawTheme.installedAt || Date.now(),
+            legacyCompatible: !!rawTheme.legacyCompatible,
+            customCSS: rawTheme.customCSS || '',
+            builtin: !!rawTheme.builtin,
+            _localPath: rawTheme._localPath,
+            legacyTokens: null,
+            tokens: null,
+        };
+
+        var source = rawTheme.tokens || rawTheme;
+        if (!source || typeof source !== 'object') {
+            throw new Error('theme tokens invalid');
+        }
+
+        var aliasMap = {
+            'surface-base': ['surface', 'base'],
+            'surface-panel': ['surface', 'panel'],
+            'surface-panel2': ['surface', 'panel2'],
+            'surface-elevated': ['surface', 'elevated'],
+            'surface-line': ['surface', 'line'],
+            'surface-hairline': ['surface', 'hairline'],
+            'text-primary': ['text', 'primary'],
+            'text-secondary': ['text', 'secondary'],
+            'text-muted': ['text', 'muted'],
+            'signal-primary': ['signal', 'primary'],
+            'signal-ai': ['signal', 'ai'],
+            'signal-system': ['signal', 'system'],
+            'signal-warn': ['signal', 'warn'],
+            'signal-danger': ['signal', 'danger'],
+            'chart-grid': ['chart', 'grid'],
+            'chart-glow': ['chart', 'glow'],
+            'canvas-glow': ['canvas', 'glow'],
+            'duration-fast': ['motion', 'fast'],
+            'duration-normal': ['motion', 'normal'],
+            'duration-slow': ['motion', 'slow'],
+            'motion-fast': ['motion', 'fast'],
+            'motion-normal': ['motion', 'normal'],
+            'motion-slow': ['motion', 'slow'],
+            'color-red': ['signal', 'danger'],
+            'color-black': ['surface', 'base'],
+            'color-white': ['text', 'primary'],
+            'color-grey-10': ['surface', 'panel'],
+            'color-grey-20': ['surface', 'panel2'],
+            'color-grey-30': ['surface', 'line'],
+            'color-grey-50': ['text', 'muted'],
+            'color-grey-70': ['text', 'secondary'],
+            'color-yellow': ['signal', 'warn'],
+            'color-green': ['signal', 'system'],
+        };
+
+        var flat = {
+            surface: {},
+            text: {},
+            signal: {},
+            chart: {},
+            motion: {},
+            canvas: {}
+        };
+        theme.legacyTokens = null;
+
+        if (source.surface || source.text || source.signal || source.chart || source.motion || source.canvas) {
+            if (source.surface && typeof source.surface === 'object') flat.surface = source.surface;
+            if (source.text && typeof source.text === 'object') flat.text = source.text;
+            if (source.signal && typeof source.signal === 'object') flat.signal = source.signal;
+            if (source.chart && typeof source.chart === 'object') flat.chart = source.chart;
+            if (source.motion && typeof source.motion === 'object') flat.motion = source.motion;
+            if (source.canvas && typeof source.canvas === 'object') flat.canvas = source.canvas;
+            theme.legacyTokens = rawTheme.legacyTokens || null;
+        } else {
+            Object.keys(source).forEach(function(key) {
+                var mapped = aliasMap[key];
+                if (mapped) {
+                    flat[mapped[0]][mapped[1]] = source[key];
+                } else {
+                    var normalized = this._normalizeTokenKey(key);
+                    var parts = normalized.split('-');
+                    if (parts.length >= 2 && (parts[0] === 'surface' || parts[0] === 'text' || parts[0] === 'signal' || parts[0] === 'chart' || parts[0] === 'motion' || parts[0] === 'canvas')) {
+                        flat[parts[0]] = flat[parts[0]] || {};
+                        flat[parts[0]][parts.slice(1).join('-')] = source[key];
+                    }
+                }
+            }.bind(this));
+            theme.legacyTokens = {};
+            Object.keys(source).forEach(function(key) {
+                if (aliasMap[key]) {
+                    theme.legacyTokens[key] = source[key];
+                    return;
+                }
+            });
+            if (!Object.keys(theme.legacyTokens).length) {
+                theme.legacyTokens = null;
+            }
+            theme.schemaVersion = this.schemaVersion;
+            theme.legacyCompatible = true;
+        }
+
+        var fallback = this._getBuiltinById(theme.id) || this._builtinThemes()[0];
+        if (!flat.surface || !flat.surface.base) {
+            flat.surface = {
+                base: flat.surface.base || fallback.tokens.surface.base,
+                panel: flat.surface.panel || fallback.tokens.surface.panel,
+                panel2: flat.surface.panel2 || fallback.tokens.surface.panel2,
+                elevated: flat.surface.elevated || fallback.tokens.surface.elevated,
+                line: flat.surface.line || fallback.tokens.surface.line,
+                hairline: flat.surface.hairline || fallback.tokens.surface.hairline,
+            };
+        }
+        if (!flat.text || !flat.text.primary) {
+            flat.text = {
+                primary: flat.text.primary || fallback.tokens.text.primary,
+                secondary: flat.text.secondary || fallback.tokens.text.secondary,
+                muted: flat.text.muted || fallback.tokens.text.muted,
+            };
+        }
+        if (!flat.signal || !flat.signal.primary) {
+            flat.signal = {
+                primary: flat.signal.primary || fallback.tokens.signal.primary,
+                ai: flat.signal.ai || fallback.tokens.signal.ai,
+                system: flat.signal.system || fallback.tokens.signal.system,
+                warn: flat.signal.warn || fallback.tokens.signal.warn,
+                danger: flat.signal.danger || fallback.tokens.signal.danger,
+            };
+        }
+        if (!flat.chart || !flat.chart.grid) {
+            flat.chart = {
+                grid: flat.chart.grid || fallback.tokens.chart.grid,
+                glow: flat.chart.glow || fallback.tokens.chart.glow,
+            };
+        }
+        if (!flat.motion || !flat.motion.normal) {
+            flat.motion = {
+                fast: flat.motion.fast || fallback.tokens.motion.fast,
+                normal: flat.motion.normal || fallback.tokens.motion.normal,
+                slow: flat.motion.slow || fallback.tokens.motion.slow,
+            };
+        }
+        if (!flat.canvas || !flat.canvas.glow) {
+            flat.canvas = {
+                glow: flat.canvas.glow || fallback.tokens.canvas.glow,
+            };
+        }
+
+        theme.tokens = {
+            surface: {
+                base: flat.surface.base,
+                panel: flat.surface.panel,
+                panel2: flat.surface.panel2,
+                elevated: flat.surface.elevated,
+                line: flat.surface.line,
+                hairline: flat.surface.hairline,
+            },
+            text: {
+                primary: flat.text.primary,
+                secondary: flat.text.secondary,
+                muted: flat.text.muted,
+            },
+            signal: {
+                primary: flat.signal.primary,
+                ai: flat.signal.ai,
+                system: flat.signal.system,
+                warn: flat.signal.warn,
+                danger: flat.signal.danger,
+            },
+            chart: {
+                grid: flat.chart.grid,
+                glow: flat.chart.glow,
+            },
+            motion: {
+                fast: flat.motion.fast || '100ms',
+                normal: flat.motion.normal || '200ms',
+                slow: flat.motion.slow || '280ms',
+            },
+            canvas: {
+                glow: flat.canvas.glow || (rawTheme.canvas && rawTheme.canvas.glow) || 'oklch(72% 0.16 205 / 0.2)',
+            },
+        };
+
+        if (Number.isFinite(theme.schemaVersion) && theme.schemaVersion < 3) {
+            theme.schemaVersion = this.schemaVersion;
+            theme.legacyCompatible = true;
+        }
+        if (typeof theme.legacyTokens !== 'object' || theme.legacyTokens === null) {
+            theme.legacyTokens = null;
+        }
+
+        return theme;
+    },
+
+    _getBuiltinById: function(id) {
+        var builtinList = this._builtinThemes();
+        for (var i = 0; i < builtinList.length; i++) {
+            if (builtinList[i].id === id) return builtinList[i];
+        }
+        return null;
+    },
+
+    activate: function(theme) {
+        var normalized = this._normalizeThemePayload(theme, 'activate');
+        this._applyTokens(normalized.tokens);
+        if (normalized.legacyTokens) this._applyTokens(normalized.legacyTokens);
+
+        localStorage.setItem('pulse-theme-tokens', JSON.stringify(normalized.tokens));
+        localStorage.setItem('pulse-theme-legacy-tokens', JSON.stringify(normalized.legacyTokens || {}));
+        localStorage.setItem('pulse-theme-schema-version', String(normalized.schemaVersion || this.schemaVersion));
+        localStorage.setItem('pulse-theme-legacy-compatible', normalized.legacyCompatible ? '1' : '0');
+        localStorage.setItem('pulse-theme-custom-css', normalized.customCSS || '');
+
         var customEl = document.getElementById('pulse-theme-custom');
         if (!customEl) {
             customEl = document.createElement('style');
             customEl.id = 'pulse-theme-custom';
             document.head.appendChild(customEl);
         }
-        customEl.textContent = theme.customCSS || '';
-        Object.values(state.charts).forEach(function(c) {
-            if (c && c.update) c.update();
-        });
-        this.activeThemeId = theme.id || theme.name;
+        customEl.textContent = normalized.customCSS || '';
+
+        Object.values(state.charts).forEach(function(c) { if (c && c.update) c.update(); });
+        if (window.TelemetryCanvas && TelemetryCanvas.refreshTheme) TelemetryCanvas.refreshTheme();
+        if (DashboardTelemetryController && DashboardTelemetryController.resize) DashboardTelemetryController.resize();
+
+        this.activeThemeId = normalized.id;
+        if (!this.installedThemes[normalized.id]) {
+            this._registerTheme(normalized, !!normalized.builtin);
+        }
+        this._persistInstalledThemes();
+
         localStorage.setItem('pulse-active-theme-id', this.activeThemeId);
         var sel = document.getElementById('theme-selector');
-        if (sel) {
-            var opt = sel.querySelector('option[value="' + this.activeThemeId + '"]');
-            if (opt) {
-                sel.value = this.activeThemeId;
-            }
-        }
-        console.log('[ThemeEngine] Activated:', theme.name || theme.id);
+        if (sel) sel.value = this.activeThemeId;
+        this._populateSelector();
+        console.log('[ThemeEngine] Activated:', normalized.name || normalized.id);
     },
 
     install: function(theme) {
-        this.installedThemes[theme.id] = {
-            name: theme.name,
-            author: theme.author,
-            type: theme.type,
-            installedAt: Date.now(),
-        };
-        localStorage.setItem('pulse-installed-themes', JSON.stringify(this.installedThemes));
-        this.activate(theme);
-        var sel = document.getElementById('theme-selector');
-        if (sel) {
-            var existing = sel.querySelector('option[value="' + theme.id + '"]');
-            if (existing) existing.remove();
-            var opt = document.createElement('option');
-            opt.value = theme.id;
-            opt.textContent = theme.name;
-            sel.appendChild(opt);
-            sel.value = theme.id;
-        }
-        showToast('主题 "' + theme.name + '" 已安装', 'success');
+        var normalized = this._normalizeThemePayload(theme, 'install');
+        normalized.installedAt = Date.now();
+        this._registerTheme(normalized, false);
+        this.activate(normalized);
+        showToast('主题 "' + normalized.name + '" 已安装', 'success');
     },
 
     resetToDefault: function() {
         localStorage.removeItem('pulse-active-theme-id');
         localStorage.removeItem('pulse-theme-tokens');
-        var customEl = document.getElementById('pulse-theme-custom');
-        if (customEl) customEl.textContent = '';
-        var root = document.documentElement;
-        var inlineStyles = root.style;
-        var keysToRemove = [];
-        for (var i = 0; i < inlineStyles.length; i++) {
-            var key = inlineStyles[i];
-            if (key.startsWith('--color-') || key.startsWith('--font-') ||
-                key.startsWith('--text-') || key.startsWith('--shadow-') ||
-                key.startsWith('--border-') || key.startsWith('--space-') ||
-                key.startsWith('--duration-')) {
-                keysToRemove.push(key);
-            }
-        }
-        for (var j = 0; j < keysToRemove.length; j++) {
-            root.style.removeProperty(keysToRemove[j]);
-        }
-        Object.values(state.charts).forEach(function(c) {
-            if (c && c.update) c.update();
-        });
+        localStorage.removeItem('pulse-theme-legacy-tokens');
+        localStorage.removeItem('pulse-theme-schema-version');
+        localStorage.removeItem('pulse-theme-legacy-compatible');
+        localStorage.removeItem('pulse-theme-custom-css');
+        this.activate(this._normalizeThemePayload(this._getBuiltinById(this.defaultThemeId) || this._builtinThemes()[0], 'default'));
         var sel = document.getElementById('theme-selector');
-        if (sel) sel.value = 'builtin-constructivist';
-        showToast('已恢复默认主题', 'info');
+        if (sel) sel.value = this.defaultThemeId;
+        showToast('主题已恢复默认', 'info');
     },
 
     isInstalled: function(themeId) {
@@ -2464,12 +3242,14 @@ function applyThemeEditor() {
 
 function normalizeThemePayload(theme) {
     if (!theme || typeof theme !== 'object') throw new Error('主题文件格式无效');
-    if (!theme.tokens || typeof theme.tokens !== 'object') throw new Error('主题缺少 tokens');
-    theme.id = theme.id || ('local-' + Date.now());
-    theme.name = theme.name || '本地主题';
-    theme.author = theme.author || 'Local';
-    theme.type = theme.type || 'custom';
-    return theme;
+    var normalized = ThemeEngine && ThemeEngine._normalizeThemePayload
+        ? ThemeEngine._normalizeThemePayload(theme, 'import')
+        : theme;
+    normalized.id = normalized.id || ('local-' + Date.now());
+    normalized.name = normalized.name || '本地主题';
+    normalized.author = normalized.author || 'Local';
+    normalized.type = normalized.type || 'custom';
+    return normalized;
 }
 
 async function installThemeFile(file) {
@@ -2513,20 +3293,48 @@ async function installThemeFile(file) {
 }
 
 function exportThemeFile() {
-    var theme = {
-        id: 'custom-' + new Date().toISOString().slice(0, 10),
-        name: 'Pulse Custom Theme',
-        author: 'Local',
-        type: 'custom',
-        version: '1.0.0',
-        tokens: collectThemeEditorTokens(),
-        customCSS: '',
+    var active = ThemeEngine && ThemeEngine.installedThemes[ThemeEngine.activeThemeId];
+    if (!active) {
+        var activeId = ThemeEngine ? ThemeEngine.activeThemeId : null;
+        active = {
+            id: activeId || 'custom-' + new Date().toISOString().slice(0, 10),
+            name: 'Pulse Custom Theme',
+            author: 'Local',
+            type: 'custom',
+            schemaVersion: 3,
+            tokens: collectThemeEditorTokens(),
+            legacyTokens: null,
+            customCSS: ''
+        };
+    }
+    var normalized = ThemeEngine && ThemeEngine._normalizeThemePayload
+        ? ThemeEngine._normalizeThemePayload(active, 'export')
+        : {
+            id: active.id || ('custom-' + new Date().toISOString().slice(0, 10)),
+            name: active.name || 'Pulse Custom Theme',
+            author: active.author || 'Local',
+            type: active.type || 'custom',
+            schemaVersion: 3,
+            tokens: collectThemeEditorTokens(),
+            legacyTokens: active.legacyTokens || null,
+            customCSS: active.customCSS || ''
+        };
+    var exportPayload = {
+        id: normalized.id,
+        name: normalized.name || 'Pulse Custom Theme',
+        author: normalized.author || 'Local',
+        type: normalized.type || 'custom',
+        schemaVersion: 3,
+        legacyCompatible: !!normalized.legacyCompatible,
+        tokens: normalized.tokens,
+        legacyTokens: normalized.legacyTokens || null,
+        customCSS: normalized.customCSS || '',
     };
-    var blob = new Blob([JSON.stringify(theme, null, 2)], { type: 'application/json' });
+    var blob = new Blob([JSON.stringify(exportPayload, null, 2)], { type: 'application/json' });
     var url = URL.createObjectURL(blob);
     var a = document.createElement('a');
     a.href = url;
-    a.download = 'pulse-custom-theme.json';
+    a.download = (normalized.id || 'pulse-custom-theme') + '.pulse-theme';
     document.body.appendChild(a);
     a.click();
     a.remove();
@@ -2627,16 +3435,13 @@ async function loadMarketplace() {
     if (!grid) return;
 
     try {
-        var resp = await fetch(STORE_API + '/v1/themes');
+        var resp = await storeFetch('/v1/themes');
         if (!resp.ok) throw new Error('HTTP ' + resp.status);
         var themes = await resp.json();
         _renderMarketplaceGrid(themes, grid, status, empty);
     } catch (e) {
-        console.warn('[Marketplace] Cannot reach store:', e);
-        if (status) {
-            status.textContent = '无法连接主题商店 (' + e.message + ')';
-            status.style.color = 'var(--color-red)';
-        }
+        console.info('[Marketplace] Store offline:', e.message);
+        showStoreOffline(status, e.storeOffline ? STORE_OFFLINE_MESSAGE : ('无法连接主题商店 (' + e.message + ')'));
         showOfflineMarketplace(grid, status, empty);
     }
 }
@@ -2663,7 +3468,7 @@ function showOfflineMarketplace(grid, status, empty) {
         grid.appendChild(item);
     }
     if (status) {
-        status.textContent = '商店离线，显示本地可用主题';
+        status.textContent = '主题商店离线，显示本地可用主题。远端市场需要启动 127.0.0.1:8081。';
         status.style.color = 'var(--color-yellow)';
     }
 }
@@ -2737,7 +3542,7 @@ async function buyTheme(theme) {
         newBtn.disabled = true;
         newBtn.textContent = '处理中...';
         try {
-            var resp = await fetch(STORE_API + '/v1/themes/' + theme.id + '/buy', {
+            var resp = await storeFetch('/v1/themes/' + theme.id + '/buy', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ email: email, payment: payment })
@@ -2760,7 +3565,7 @@ async function buyTheme(theme) {
                 pollPaymentStatus(purchaseId, theme);
             }
         } catch (e) {
-            showToast('购买错误: ' + e.message, 'error');
+            showToast(e.storeOffline ? STORE_OFFLINE_MESSAGE : ('购买错误: ' + e.message), 'error');
             newBtn.disabled = false;
             newBtn.textContent = '确认购买';
         }
@@ -2775,7 +3580,7 @@ function pollPaymentStatus(purchaseId, theme) {
     var statusEl = document.getElementById('purchase-status');
     _purchaseTimer = setInterval(async function() {
         try {
-            var resp = await fetch(STORE_API + '/v1/purchases/' + purchaseId);
+            var resp = await storeFetch('/v1/purchases/' + purchaseId);
             if (!resp.ok) return;
             var result = await resp.json();
             if (result.status === 'completed' || result.status === 'paid') {
@@ -2796,6 +3601,7 @@ function pollPaymentStatus(purchaseId, theme) {
             }
         } catch (e) {
             console.warn('[Purchase] Poll error:', e);
+            if (statusEl && e.storeOffline) statusEl.textContent = STORE_OFFLINE_MESSAGE;
         }
     }, 3000);
 }
@@ -2813,7 +3619,7 @@ function cancelPurchase() {
 async function installTheme(theme) {
     closeThemeDetail();
     try {
-        var resp = await fetch(STORE_API + '/v1/themes/' + theme.id);
+        var resp = await storeFetch('/v1/themes/' + theme.id);
         if (resp.ok) {
             var fullTheme = await resp.json();
             ThemeEngine.install(fullTheme);
@@ -2823,18 +3629,15 @@ async function installTheme(theme) {
         console.warn('[Install] Cannot fetch theme from store:', e);
     }
     if (theme.id === 'builtin-constructivist') {
-        ThemeEngine.resetToDefault();
-        ThemeEngine.installedThemes['builtin-constructivist'] = {
-            name: theme.name || '苏维埃全主义构成',
-            author: 'Pulse Team',
-            type: '官方',
-            installedAt: Date.now(),
-        };
-        localStorage.setItem('pulse-installed-themes', JSON.stringify(ThemeEngine.installedThemes));
-        showToast('已激活默认主题', 'success');
+        var legacy = ThemeEngine._getBuiltinById('builtin-constructivist');
+        if (legacy) {
+            ThemeEngine.install(legacy);
+            return;
+        }
+        showToast('无法获取内置 legacy 主题', 'error');
         return;
     }
-    showToast('无法获取主题文件。请检查商店连接。', 'error');
+    showToast('无法获取主题文件。' + STORE_OFFLINE_MESSAGE, 'error');
 }
 
 // ══════════════════════════════════════════════════
@@ -2867,7 +3670,7 @@ async function sendRestoreCode() {
     btn.disabled = true;
     btn.textContent = '发送中...';
     try {
-        var resp = await fetch(STORE_API + '/v1/restore', {
+        var resp = await storeFetch('/v1/restore', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ email: email })
@@ -2880,7 +3683,7 @@ async function sendRestoreCode() {
         document.getElementById('restore-step-verify').classList.remove('hidden');
         showToast('验证码已发送到 ' + email, 'success');
     } catch (e) {
-        showToast('错误: ' + e.message, 'error');
+        showToast(e.storeOffline ? STORE_OFFLINE_MESSAGE : ('错误: ' + e.message), 'error');
     } finally {
         btn.disabled = false;
         btn.textContent = '发送验证码';
@@ -2898,7 +3701,7 @@ async function verifyRestoreCode() {
     btn.disabled = true;
     btn.textContent = '验证中...';
     try {
-        var resp = await fetch(STORE_API + '/v1/restore/verify', {
+        var resp = await storeFetch('/v1/restore/verify', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ email: email, code: code })
@@ -2936,7 +3739,7 @@ async function verifyRestoreCode() {
             listEl.appendChild(item);
         }
     } catch (e) {
-        showToast('错误: ' + e.message, 'error');
+        showToast(e.storeOffline ? STORE_OFFLINE_MESSAGE : ('错误: ' + e.message), 'error');
     } finally {
         btn.disabled = false;
         btn.textContent = '验证';
@@ -2948,9 +3751,7 @@ function initThemeSelector() {
     if (!sel) return;
     sel.addEventListener('change', function() {
         var val = sel.value;
-        if (val === 'builtin-constructivist') {
-            ThemeEngine.resetToDefault();
-        } else if (ThemeEngine.installedThemes[val]) {
+        if (ThemeEngine.installedThemes[val]) {
             var theme = ThemeEngine.installedThemes[val];
             // Local themes: load customCSS from separate file if available
             if (theme._localPath) {
@@ -3457,14 +4258,14 @@ function showThemeMarketplace() {
 async function loadMarketplaceToGrid(grid, status, empty) {
     status.textContent = '加载中...';
     try {
-        var resp = await fetch(STORE_API + '/v1/themes');
+        var resp = await storeFetch('/v1/themes');
         if (!resp.ok) throw new Error('HTTP ' + resp.status);
         var themes = await resp.json();
         _renderMarketplaceGrid(themes, grid, status, empty);
         if (themes.length) status.textContent = themes.length + ' 个主题可用';
     } catch (e) {
-        status.textContent = '商店暂不可用（离线模式）';
-        status.style.color = 'var(--color-grey-50)';
+        showStoreOffline(status, e.storeOffline ? STORE_OFFLINE_MESSAGE : '商店暂不可用（离线模式）');
+        if (empty) empty.classList.remove('hidden');
     }
 }
 document.addEventListener('click', function(e) {
@@ -3615,6 +4416,7 @@ function initPairingOverlay() {
 function initPhase45() {
   if (!document.getElementById("titlebar")) return; // skip if HTML not loaded
   initTitleBar();
+  initSetupBanner();
   initSetupForm();
   initSettingsForm();
   initAutostartToggle();
@@ -3628,18 +4430,6 @@ function initPhase45() {
   initMarketplaceOnTab();
   initMarketplaceOverlayButtons();
   initPairingOverlay();
-  var hardwareTab = document.querySelector("[data-tab=hardware]");
-  if (hardwareTab) {
-    hardwareTab.addEventListener('click', function() {
-      setTimeout(function() {
-        Promise.all([loadDevices(), loadLanHardwareDevices()]);
-      }, 100);
-    });
-  }
-  var pluginsTab = document.querySelector("[data-tab=plugins]");
-  if (pluginsTab) {
-    pluginsTab.addEventListener('click', function() { setTimeout(loadPlugins, 100); });
-  }
   if (!document.getElementById("toast-container")) {
     var tc = document.createElement("div");
     tc.id = "toast-container";
@@ -3653,3 +4443,6 @@ if (document.readyState === 'loading') {
 } else {
     init();
 }
+
+
+

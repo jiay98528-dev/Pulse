@@ -1,6 +1,27 @@
-# PULSE v2.0 — 改动声明
+# PULSE — 改动声明
 
-> 发布日期: 2026-06-22 | 版本: v2.0 | 状态: 发行就绪
+## 2026-06-23 v3.0 UI Reset
+
+Pulse 前端方向重置为 AI Telemetry / Next-gen Operations Surface。
+
+- 更新 `PRODUCT.md`、`DESIGN.md`、`AGENTS.md` 和 `docs/错题本.md`，废弃旧构成主义视觉约束。
+- 新增 `docs/UI_REFACTOR_SPEC_GPT5_CODEX_SPARK.md`，作为 GPT5.3-Codex-Spark 执行规格。
+- 新增自研 `TelemetryCanvas` 引擎和本地 `Chart` 兼容 shim，移除可见 Chart.js CDN 依赖。
+- 首页布局迁移到 `pulse-ui-layout-v3`，保留 Widget Dock 可配置能力。
+- 主题系统升级到 schema v3，并保留旧 token alias 兼容。
+
+### 2026-06-23 Runtime Stabilization
+
+- Dashboard `heroAiCanvas`、`heroSystemCanvas`、`heroFreshnessCanvas`、`dashboardSystemStream`、`dashboardUsageStream`、`dashboardHeatStrip` 接入 `DashboardTelemetryController`，不再空白。
+- Tab 激活统一走 `activateTab()`，支持 `?tab=` 和 hash 直达，切换时统一 resize/update 可见图表。
+- 首次设置从全局阻塞 overlay 改为可关闭 banner，设置页保留完整 API key 表单。
+- AI widgets 在未配置 API key 时保留锁定空态，不再从 Widget Dock 中自动删除。
+- 主题市场依赖 8081 独立服务时显示明确离线态，购买/恢复不再静默失败。
+- `TelemetryCanvas` 跳过不可见 canvas 的 RAF 渲染和 resize，Chart shim 给普通图表 canvas 填满父容器，修复硬件页 1x1 图表和 CPU 负载动画丢失问题。
+
+---
+
+## LEGACY 2026-06-22 v2.0
 
 ---
 

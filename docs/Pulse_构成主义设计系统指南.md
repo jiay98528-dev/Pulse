@@ -1,4 +1,6 @@
-# Pulse 看板 — 构成主义设计系统指南
+# LEGACY: Pulse 看板 — 构成主义设计系统指南
+
+> LEGACY NOTICE: 本文件是 2026-06-23 之前的历史设计研究资料。旧构成主义、红黑白、禁止渐变/发光/圆角、Chart.js 风格等内容不再作为当前 Pulse UI 约束。当前权威规范见 `PRODUCT.md`、`DESIGN.md`、`docs/UI_REFACTOR_SPEC_GPT5_CODEX_SPARK.md`。
 
 > 版本: v1.0 | 最后更新: 2026-06-19
 > 本指南将 1920-1930 年代俄罗斯构成主义视觉语言融入实时监控看板，形成一套可直接作为前端开发约束的设计规范。

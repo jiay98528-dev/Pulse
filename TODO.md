@@ -1,7 +1,26 @@
 # PULSE — 项目 TODO
 
-> v1.0: 2026-06-19 (全部完成) | v2.0: 2026-06-21 (M1-M6 全部完成, 发行就绪)
-> 最后更新: 2026-06-23 | 当前阶段: v2.1 发行验收完成
+> v1.0/v2.0/v2.1 已完成并保留为历史记录。
+> 最后更新: 2026-06-23 | 当前阶段: v3.0 AI Telemetry UI 重构
+
+---
+
+## 🚧 v3.0 AI Telemetry UI 重构
+
+> 设计权威: `PRODUCT.md`, `DESIGN.md`, `docs/UI_REFACTOR_SPEC_GPT5_CODEX_SPARK.md`
+
+- [x] 文档权威链重置：旧构成主义规则标记为 legacy
+- [x] 新增自研 Canvas telemetry engine
+- [x] 移除可见 Chart.js CDN 依赖
+- [x] 首页迁移到 `pulse-ui-layout-v3` 半固定可配置模型
+- [x] 主题 schema v3 兼容导入/导出
+- [x] Dashboard 新增 6 个 telemetry Canvas 接入 `DashboardTelemetryController`
+- [x] URL `?tab=` / hash 直达验收路径
+- [x] 首次设置从全局遮罩改为非阻塞 banner
+- [x] AI widgets 未配置时保留锁定空态，不再自动隐藏
+- [x] 主题市场 8081 未运行时显示明确离线态
+- [x] 隐藏 tab / 普通 Chart shim 的 1x1 Canvas 问题修复
+- [ ] 后续视觉精修：基于 Playwright 截图继续打磨局部排版和动画
 
 ---
 
@@ -18,9 +37,9 @@
 
 ---
 
-## ✅ v2.0 里程碑 (6 里程碑, 38 任务 — 全部完成)
+## ✅ LEGACY v2.0 里程碑 (6 里程碑, 38 任务 — 全部完成)
 
-> 设计权威: `docs/需求规格说明书_v2.0.md` 第七节
+> LEGACY NOTICE: `docs/需求规格说明书_v2.0.md` 是历史需求，不再作为当前 UI 设计权威。
 
 | Milestone | 进度 | 状态 |
 |-----------|------|------|
@@ -57,7 +76,7 @@
 
 ### M4 — 主题系统 (6/6) ✅
 - [x] 4.1 ThemeEngine — JSON→CSS变量→图表重绘 (camelCase→kebab转换，Chart.js update)
-- [x] 4.2 默认 theme.json (苏维埃构成主义 · 21语义变量令牌)
+- [x] 4.2 默认 theme.json (**历史/LEGACY：苏维埃构成主义 · 21 语义变量令牌** )
 - [x] 4.3 外观卡片 — 下拉选择 + 实时色块预览
 - [x] 4.4 主题市场卡片 — 自适应网格浏览
 - [x] 4.5 .pulse-theme 拖入安装 (格式验证 + localStorage缓存 + 刷新列表)

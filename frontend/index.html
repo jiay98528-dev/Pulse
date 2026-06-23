@@ -7,7 +7,7 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Tektur:wght@400;700;900&family=Bebas+Neue&family=Montserrat:wght@400;700&family=JetBrains+Mono:wght@400;700&family=Playfair+Display:wght@400;600;700&family=Nunito:wght@400;600;700&family=Lora:wght@400;600;700&family=Cormorant+Garamond:wght@400;600;700&family=Inter:wght@400;600&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="css/style.css?v=2.0.8">
+    <link rel="stylesheet" href="css/style.css?v=2.0.9">
 </head>
 <body>
     <!-- ═══ CUSTOM TITLE BAR ═══ -->
@@ -23,6 +23,16 @@
 
     <!-- ═══ CONNECTION STATUS BANNER ═══ -->
     <div id="connection-banner" class="hidden"></div>
+    <div id="setup-banner" class="setup-banner hidden">
+        <div>
+            <strong>AI 功能需要 API key</strong>
+            <span>配置后将启用余额、Token、缓存命中率和用量图表。</span>
+        </div>
+        <div class="setup-banner-actions">
+            <button type="button" class="btn-secondary" id="setup-banner-dismiss">稍后</button>
+            <button type="button" class="btn-primary" id="setup-banner-settings">去配置</button>
+        </div>
+    </div>
     <!-- ═══ HEADER ═══ -->
     <header class="header">
         <div class="header-brand">
@@ -48,23 +58,50 @@
 
         <!-- ─── TAB: DASHBOARD ─── -->
         <section class="tab-content active" id="tab-dashboard">
-            <!-- Widget Toolbar -->
+            <div class="telemetry-hero" id="telemetryHero">
+                <div class="telemetry-hero-main">
+                    <div class="hero-kpi" id="ai-hero">
+                        <div class="hero-kpi-label">AI BALANCE</div>
+                        <div class="kpi-value" id="accountBalance">--</div>
+                        <div class="kpi-meta">等待 AI 遥测</div>
+                    </div>
+                    <canvas id="heroAiCanvas" class="telemetry-canvas"></canvas>
+                </div>
+                <div class="telemetry-hero-panel">
+                    <div class="panel-kicker">SYSTEM LOAD</div>
+                    <div class="panel-value" id="heroSystemLoad">--</div>
+                    <canvas id="heroSystemCanvas" class="telemetry-canvas"></canvas>
+                </div>
+                <div class="telemetry-hero-panel">
+                    <div class="panel-kicker">DATA FRESHNESS</div>
+                    <div class="panel-value" id="heroFreshness">--</div>
+                    <canvas id="heroFreshnessCanvas" class="telemetry-canvas"></canvas>
+                </div>
+            </div>
+
+            <div class="telemetry-panel-grid">
+                <section class="telemetry-panel">
+                    <div class="card-header">系统遥测流</div>
+                    <canvas id="dashboardSystemStream" class="telemetry-canvas"></canvas>
+                </section>
+                <section class="telemetry-panel">
+                    <div class="card-header">AI 用量流</div>
+                    <canvas id="dashboardUsageStream" class="telemetry-canvas"></canvas>
+                </section>
+                <section class="telemetry-panel compact">
+                    <div class="card-header">热度条</div>
+                    <canvas id="dashboardHeatStrip" class="telemetry-canvas"></canvas>
+                </section>
+            </div>
+
+            <!-- Widget Dock -->
             <div class="widget-toolbar">
-                <span class="widget-edit-hint">可配置组件仪表盘</span>
-                <div id="widgetEditActions" class="hidden" style="display: flex; gap: 8px;">
+                <span class="widget-edit-hint">可配置 Widget Dock</span>
+                <div id="widgetEditActions" class="hidden">
                     <button class="btn-secondary" id="widgetDoneBtn">完成</button>
                 </div>
                 <button class="btn-secondary" id="widgetEditBtn">编辑</button>
             </div>
-
-            <!-- AI Balance Hero KPI -->
-            <div class="hero-kpi" id="ai-hero" style="margin-bottom: var(--space-3);">
-                <div class="kpi-value" id="accountBalance" style="font-size: var(--font-kpi); font-family: var(--font-mono); color: var(--color-white);">--</div>
-                <div class="kpi-label" style="font-family: var(--font-heading); font-size: var(--text-xs); text-transform: uppercase; letter-spacing: 0.12em; color: var(--color-grey-50);">AI 余额</div>
-                <div class="kpi-meta" style="font-family: var(--font-mono); font-size: var(--text-xs); color: var(--color-grey-50); margin-top: 4px;"></div>
-            </div>
-
-            <!-- Widget Grid -->
             <div class="widget-grid" id="widgetGrid"></div>
 
             <!-- Widget Library (shown in edit mode) -->
@@ -334,7 +371,7 @@
                 <h3>外观</h3>
                 <label>当前主题
                     <select id="theme-selector" class="form-input">
-                        <option value="builtin-constructivist">苏维埃构成主义 (默认)</option>
+                        <option value="builtin-telemetry-ops">Telemetry Ops (默认)</option>
                     </select>
                 </label>
                 <p style="color:var(--color-grey-50);font-size:12px;margin-top:8px;">
@@ -393,9 +430,9 @@
             <div class="settings-card">
                 <h3>关于</h3>
                 <div class="about-info">
-                    <span><strong>PULSE</strong> v2.0</span>
-                    <span>实时数据看板 · 苏维埃构成主义设计</span>
-                    <span>Tauri v2 + Python FastAPI + Chart.js</span>
+                    <span><strong>PULSE</strong> v3.0-runtime</span>
+                    <span>AI Telemetry / Operations Surface</span>
+                    <span>Tauri v2 + Python FastAPI + TelemetryCanvas</span>
                     <span>&copy; 2026 Pulse Project</span>
                 </div>
             </div>
@@ -416,10 +453,10 @@
     </main>
 
     <!-- ═══ SCRIPTS ═══ -->
-    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
-    <script src="js/app.js?v=2.0.8"></script>
+    <script src="js/telemetry-canvas.js?v=3.0.1"></script>
+    <script src="js/app.js?v=2.0.9"></script>
     <!-- ═══ SETUP OVERLAY ═══ -->
-    <div id="setup-overlay" class="overlay">
+    <div id="setup-overlay" class="overlay hidden">
         <div class="overlay-content setup-wizard">
             <h1>PULSE</h1>
             <p class="setup-subtitle">Real-time Dashboard &mdash; First Time Setup</p>
