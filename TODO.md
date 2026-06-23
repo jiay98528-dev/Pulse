@@ -24,6 +24,21 @@
 
 ---
 
+## 🚧 v3.0 正式发行工程
+
+> 当前判断：本地开发运行和安装包构建不是同一件事。正式发行必须通过 sidecar、数据目录和安装后 smoke 验收。
+
+- [x] 新增 `PULSE_DATA_DIR`：发行态配置、SQLite 和运行态文件写入用户数据目录，不写安装目录。
+- [x] 新增 `PULSE_FRONTEND_DIR` / frozen `_MEIPASS/frontend`：PyInstaller sidecar 保留 `localhost:8080` 纯 Web fallback。
+- [x] 新增 `PULSE_HOST` / `PULSE_PORT`：Tauri sidecar 启动时可覆盖 HTTP 监听。
+- [x] Tauri release 改为 bundled backend sidecar，不再依赖源码目录、系统 Python 或仓库 venv。
+- [x] 新增 `scripts/build-backend-sidecar.ps1` 和 `scripts/build-release.ps1`。
+- [x] 新增 `scripts/release-smoke.js`，覆盖 Dashboard canvas、URL tab、硬件 CPU canvas、主题市场离线态。
+- [ ] 完整安装后验收：从 MSI/NSIS 安装路径启动，确认后端自动启动、关闭后进程退出。
+- [ ] Windows 代码签名与自动更新仍未纳入本轮发行闭环。
+
+---
+
 <details>
 <summary>✅ v1.0 全部完成 (5 Phase, 15/15) — 历史参考</summary>
 

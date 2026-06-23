@@ -19,6 +19,14 @@ Pulse 前端方向重置为 AI Telemetry / Next-gen Operations Surface。
 - 主题市场依赖 8081 独立服务时显示明确离线态，购买/恢复不再静默失败。
 - `TelemetryCanvas` 跳过不可见 canvas 的 RAF 渲染和 resize，Chart shim 给普通图表 canvas 填满父容器，修复硬件页 1x1 图表和 CPU 负载动画丢失问题。
 
+### 2026-06-23 Release Packaging
+
+- 后端新增运行时路径层，发行态通过 `PULSE_DATA_DIR` 写入配置和 SQLite，通过 `PULSE_FRONTEND_DIR` 或 PyInstaller `_MEIPASS/frontend` 保留纯 Web fallback。
+- Tauri release 改为 bundled backend sidecar，版本统一为 `3.0.0`，CSP 移除不再使用的 `cdn.jsdelivr.net` 脚本源。
+- 新增 `scripts/build-backend-sidecar.ps1`、`scripts/build-release.ps1`、`scripts/release-smoke.js`，用于 sidecar 构建、完整打包和浏览器 smoke 验收。
+- 设置页 URL 直达时也会触发主题市场加载；主题商店 8081 未启动时显示离线态和本地可用主题。
+- 当前状态：已解决“安装后依赖源码/Python/venv”的主要发行阻断；仍需完成 MSI/NSIS 安装后人工 smoke 和签名策略。
+
 ---
 
 ## LEGACY 2026-06-22 v2.0
@@ -27,7 +35,7 @@ Pulse 前端方向重置为 AI Telemetry / Next-gen Operations Surface。
 
 ## 一、项目概述
 
-Pulse 是 Surface Go Win10 上运行的实时数据看板，Tauri v2 + Python Sidecar + 原生 HTML/CSS/JS 架构。v2.0 在 v1.0 基础上完成了 6 个里程碑（38 任务）的全面重构，并经过 ChatGPT 5.5 发行审计和 Claude Code P0~P2 深度修复，当前已达到发行标准。
+Pulse 是 Surface Go Win10 上运行的实时数据看板，Tauri v2 + Python Sidecar + 原生 HTML/CSS/JS 架构。v2.0 在 v1.0 基础上完成了 6 个里程碑（38 任务）的全面重构，并经过 ChatGPT 5.5 发行审计和 Claude Code P0~P2 深度修复；该结论是 legacy v2.0 本地发行审计语境，不代表 v3.0 已完成安装后正式发行闭环。
 
 ---
 
