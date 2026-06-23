@@ -54,4 +54,9 @@ def get_frontend_dir() -> Path:
 
 def get_plugins_dir() -> Path:
     """Return the plugin discovery directory."""
-    return _env_path("PULSE_PLUGINS_DIR") or (get_bundle_root() / "plugins")
+    env_path = _env_path("PULSE_PLUGINS_DIR")
+    if env_path:
+        return env_path
+    if is_frozen():
+        return get_bundle_root() / "plugins"
+    return Path(__file__).resolve().parent / "plugins"
