@@ -25,6 +25,11 @@ from collectors.deepseek import DeepseekCollector
 from collectors.wmi_remote import WMIRemoteCollector
 from plugins.manager import PluginManager
 
+try:
+    from runtime_paths import get_frontend_dir
+except ImportError:  # Allows package-style imports in smoke tests.
+    from .runtime_paths import get_frontend_dir
+
 # ── Events (Lifespan) — defined before app so FastAPI can reference it ──
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -1047,7 +1052,7 @@ async def api_analysis_models(days: int = 30):
 # Note: NOT using app.mount() because it intercepts ALL paths including /ws.
 # Instead, a catch-all GET route serves static files while allowing WebSocket
 # and API routes to match first via normal route resolution order.
-frontend_dir = Path(__file__).parent.parent / "frontend"
+frontend_dir = get_frontend_dir()
 frontend_root = frontend_dir.resolve()
 
 @app.get("/{path:path}", include_in_schema=False)
@@ -1066,7 +1071,13 @@ async def serve_frontend(path: str, request: Request):
         return FileResponse(file_path)
     if Path(path).suffix:
         raise HTTPException(404, "Not found")
-    return FileResponse(frontend_root / "index.html")
+    index_path = frontend_root / "index.html"
+    if not index_path.exists():
+        return JSONResponse(
+            {"error": "frontend_not_found", "path": str(index_path)},
+            status_code=503,
+        )
+    return FileResponse(index_path)
 
 
 # ── Entry ──────────────────────────────────────────────
