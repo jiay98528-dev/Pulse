@@ -1,0 +1,10 @@
+body {
+  background-image: linear-gradient(180deg, oklch(98% 0.006 230), var(--surface-base));
+}
+
+.telemetry-panel,
+.settings-card,
+.theme-market-card,
+.themes-toolbar {
+  box-shadow: 0 10px 34px oklch(56% 0.04 230 / 0.12);
+}

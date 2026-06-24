@@ -1,13 +1,13 @@
 # PULSE — 项目 TODO
 
 > v1.0/v2.0/v2.1 已完成并保留为历史记录。
-> 最后更新: 2026-06-23 | 当前阶段: v3.0 AI Telemetry UI 重构
+> 最后更新: 2026-06-24 | 当前阶段: v3.0 AI Telemetry UI 重构 + GaugePane 发现性/发行门禁
 
 ---
 
 ## 🚧 v3.0 AI Telemetry UI 重构
 
-> 设计权威: `PRODUCT.md`, `DESIGN.md`, `docs/UI_REFACTOR_SPEC_GPT5_CODEX_SPARK.md`
+> 设计权威: `PRODUCT.md`, `DESIGN.md`, `docs/UI_REFACTOR_SPEC_GPT5_CODEX_SPARK.md`, `docs/GaugePane_v3_需求变更_欢迎页主题插件发行门禁.md`
 
 - [x] 文档权威链重置：旧构成主义规则标记为 legacy
 - [x] 新增自研 Canvas telemetry engine
@@ -20,6 +20,10 @@
 - [x] AI widgets 未配置时保留锁定空态，不再自动隐藏
 - [x] 主题市场 8081 未运行时显示明确离线态
 - [x] 隐藏 tab / 普通 Chart shim 的 1x1 Canvas 问题修复
+- [x] 新增首次欢迎页：首次启动自动弹出，可跳过，设置页可重开，状态键 `gaugepane-welcome-v1-seen`
+- [x] 导航升级为 `仪表盘 / 硬件 / 分析 / 主题 / 插件 / 设置`
+- [x] 新增“主题”一级页面：本地主题切换、主题市场、导入导出、主题编辑器、热更新状态集中展示
+- [x] 插件作为一级页面保持常驻可见，并在欢迎页/设置页提供入口提示
 - [ ] 后续视觉精修：基于 Playwright 截图继续打磨局部排版和动画
 
 ---
@@ -34,6 +38,9 @@
 - [x] Tauri release 改为 bundled backend sidecar，不再依赖源码目录、系统 Python 或仓库 venv。
 - [x] 新增 `scripts/build-backend-sidecar.ps1` 和 `scripts/build-release.ps1`。
 - [x] 新增 `scripts/release-smoke.js`，覆盖 Dashboard canvas、URL tab、硬件 CPU canvas、主题市场离线态。
+- [x] Preview 发行门禁：内置主题市场可打开，支持官方/社区/本地筛选，本地主题可切换，在线市场离线态明确。
+- [ ] Stable 发行门禁：在线主题列表、下载或购买、主题详情、恢复已购或明确失败态可用。
+- [x] 发行前预置 5 个官方 schema v3 主题：`gauge-ops`、`frost-console`、`amber-terminal`、`graphite-studio`、`aurora-desk`；legacy constructivist 不计入。
 - [ ] 完整安装后验收：从 MSI/NSIS 安装路径启动，确认后端自动启动、关闭后进程退出。
 - [ ] Windows 代码签名与自动更新仍未纳入本轮发行闭环。
 

@@ -4,9 +4,13 @@
 
 product
 
+## Brand
+
+对外品牌采用 **GaugePane / 仪窗**。当前代码库与部分历史文档仍保留 Pulse 命名，短期作为历史项目名处理；面向用户的新增需求和商业化文档使用 GaugePane。
+
 ## Users
 
-Pulse 的主要用户是一位在 Surface Go 第一代（Win10，10 英寸屏，4GB RAM）上运行常驻监控面板的开发者。设备通常放在副屏位置，用于开发时远距扫视系统状态、AI API 用量和局域网设备健康度。
+GaugePane 的主要用户是一位在 Surface Go 第一代（Win10，10 英寸屏，4GB RAM）上运行常驻监控面板的开发者或桌搭玩家。设备通常放在副屏位置，用于开发或桌面常驻时远距扫视系统状态、AI API 用量、主题仪表和局域网设备健康度。
 
 使用姿态分为两类：
 - 远距扫视：40cm 物理视距，但等效于 27 寸显示器 2m 观看，因此关键数值必须大、清晰、稳定。
@@ -14,19 +18,25 @@ Pulse 的主要用户是一位在 Surface Go 第一代（Win10，10 英寸屏，
 
 ## Product Purpose
 
-Pulse 是一个 AI Telemetry / Next-gen Operations Surface：在低功耗 Windows 平板上持续显示系统、AI API 和局域网设备状态，让用户一眼判断当前运行负载、费用压力和异常趋势。
+GaugePane 是一个本地 AI Telemetry / Next-gen Operations Surface：在低功耗 Windows 平板上持续显示系统、AI API、主题仪表、插件和局域网设备状态，让用户一眼判断当前运行负载、费用压力和异常趋势。
 
 核心能力：
 - 实时监控本机以及未来局域网设备的 CPU、内存、GPU、温度、磁盘、网络、电池和运行时间。
 - 展示 Deepseek 及其他 AI Provider 的余额、Token、缓存命中率、费用和历史趋势。
 - WebSocket 每秒推送系统数据，AI/费用数据按后端策略刷新。
 - 支持 CSV/ZIP 导入补充 AI 用量历史。
+- 首次启动展示可跳过、可重开的欢迎页，介绍系统仪表、AI 配置、Codex 状态、局域网多设备监看、主题市场和插件能力。
+- 主题和插件必须作为一级功能可见：导航结构为“仪表盘 / 硬件 / 分析 / 主题 / 插件 / 设置”。
+- 内置主题市场是发行门禁：Preview 版至少支持本地主题切换、官方/社区/本地筛选和在线市场离线态；Stable 版必须支持在线下载或购买闭环。
+- 发行前至少预置 5 个完全不同的官方 schema v3 主题，legacy constructivist 不计入。
 - 作为 Tauri 常驻看板运行，同时保留 `localhost:8080` 纯 Web fallback。
 
 成功标准：
 - 每天至少看一眼就能判断系统是否健康、费用是否异常、趋势是否值得介入。
 - 远距扫视时不需要读小字也能理解关键状态。
 - 长时间运行不积压内存，不让 Surface Go 变卡。
+- 新用户首次启动后能在 2 分钟内理解仪表盘、AI 配置、主题市场和插件入口。
+- 用户不进入设置页也能发现并使用主题和插件。
 
 ## Product Personality
 
@@ -51,6 +61,15 @@ Pulse 是一个 AI Telemetry / Next-gen Operations Surface：在低功耗 Window
 4. **Configurable, not chaotic**。首页采用半固定可配置骨架：核心监控区固定，Widget Dock 可增删排序。
 5. **Offline resilience**。AI API 不可用时，本地系统数据、缓存历史和明确降级状态仍然可见。
 6. **Theme compatibility with a new core**。主题系统升级到 v3，但旧主题要能兼容迁移，不能让用户配置直接失效。
+7. **Feature discoverability is a product requirement**。欢迎页、主题一级入口和插件一级入口属于发行前体验门禁，不是可选装饰。
+
+## Release Experience Gates
+
+- 欢迎页：首次启动自动展示，用户可跳过；设置页可重新打开；状态键为 `gaugepane-welcome-v1-seen`。
+- 主题一级页：承载本地主题切换、主题市场、导入导出、主题编辑器和热更新状态；主题功能不得只存在于设置页深处。
+- 插件一级页：始终可见，承载插件启停、LAN 发现/配对和共享指标配置；插件不得被隐藏成高级功能。
+- 主题市场：必须有官方/社区/本地分类和明确离线态；Preview 可无真实下载服务器，Stable 必须有在线下载或购买闭环。
+- 官方主题：发行前至少预置 `gauge-ops`、`frost-console`、`amber-terminal`、`graphite-studio`、`aurora-desk` 五个官方主题。
 
 ## Accessibility & Inclusion
 

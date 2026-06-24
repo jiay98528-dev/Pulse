@@ -1,0 +1,61 @@
+{
+  "schemaVersion": 3,
+  "id": "amber-terminal",
+  "name": "琥珀终端",
+  "version": "1.0.0",
+  "author": "GaugePane Team",
+  "type": "official",
+  "description": "琥珀终端和复古仪表风格，适合夜间桌搭和高识别度数据面板。",
+  "readability": "深棕底、琥珀主信号和高亮文本，避免纯黑纯黄造成刺眼。",
+  "preview": {
+    "category": "official",
+    "icon": "▣",
+    "swatches": ["oklch(16% 0.035 62)", "oklch(78% 0.15 78)", "oklch(66% 0.13 140)"]
+  },
+  "tokens": {
+    "surface": {
+      "base": "oklch(16% 0.035 62)",
+      "panel": "oklch(20% 0.04 62)",
+      "panel2": "oklch(24% 0.044 62)",
+      "elevated": "oklch(29% 0.05 62)",
+      "line": "oklch(46% 0.08 70)",
+      "hairline": "oklch(58% 0.10 76 / 0.35)"
+    },
+    "text": {
+      "primary": "oklch(89% 0.055 82)",
+      "secondary": "oklch(73% 0.075 78)",
+      "muted": "oklch(58% 0.055 72)"
+    },
+    "signal": {
+      "primary": "oklch(78% 0.15 78)",
+      "ai": "oklch(72% 0.13 48)",
+      "system": "oklch(66% 0.13 140)",
+      "warn": "oklch(82% 0.16 88)",
+      "danger": "oklch(64% 0.18 28)"
+    },
+    "chart": {
+      "grid": "oklch(36% 0.055 68 / 0.72)",
+      "glow": "oklch(78% 0.15 78 / 0.24)"
+    },
+    "motion": {
+      "fast": "100ms",
+      "normal": "180ms",
+      "slow": "260ms"
+    },
+    "canvas": {
+      "glow": "oklch(78% 0.15 78 / 0.22)"
+    }
+  },
+  "legacyTokens": {
+    "font-body": "'JetBrains Mono', 'Cascadia Mono', monospace",
+    "font-heading": "'JetBrains Mono', 'Cascadia Mono', monospace",
+    "font-mono": "'JetBrains Mono', 'Cascadia Mono', monospace",
+    "text-base": "15px",
+    "text-lg": "1.2rem",
+    "text-4xl": "3.4rem"
+  },
+  "marketplace": {
+    "price": 0,
+    "tags": ["official", "terminal", "amber", "retro"]
+  }
+}

@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-    <title>PULSE — 数据看板</title>
+    <title>GaugePane 仪窗</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Tektur:wght@400;700;900&family=Bebas+Neue&family=Montserrat:wght@400;700&family=JetBrains+Mono:wght@400;700&family=Playfair+Display:wght@400;600;700&family=Nunito:wght@400;600;700&family=Lora:wght@400;600;700&family=Cormorant+Garamond:wght@400;600;700&family=Inter:wght@400;600&display=swap" rel="stylesheet">
@@ -12,7 +12,7 @@
 <body>
     <!-- ═══ CUSTOM TITLE BAR ═══ -->
     <div id="titlebar" data-tauri-drag-region>
-        <div id="titlebar-left">PULSE</div>
+        <div id="titlebar-left">GaugePane</div>
         <div id="titlebar-center"></div>
         <div id="titlebar-right">
             <button class="titlebar-btn" id="titlebar-minimize">&minus;</button>
@@ -37,15 +37,16 @@
     <header class="header">
         <div class="header-brand">
             <span class="header-logo">★</span>
-            <h1 class="header-title">PULSE</h1>
-            <span class="header-subtitle">实时数据看板</span>
+            <h1 class="header-title">GaugePane</h1>
+            <span class="header-subtitle">仪窗 · 本地遥测仪表窗</span>
         </div>
         <nav class="header-nav" id="mainNav">
             <button class="tab-btn active" data-tab="dashboard">仪表盘</button>
             <button class="tab-btn" data-tab="hardware">硬件</button>
             <button class="tab-btn" data-tab="analysis">分析</button>
-            <button class="tab-btn" data-tab="settings">配置</button>
+            <button class="tab-btn" data-tab="themes">主题</button>
             <button class="tab-btn" data-tab="plugins">插件</button>
+            <button class="tab-btn" data-tab="settings">设置</button>
         </nav>
         <div class="header-status">
             <span class="conn-status" id="connStatus">●</span>
@@ -341,47 +342,62 @@
             </div>
         </section>
 
-        <!-- ─── TAB: SETTINGS ─── -->
-        <section id="tab-settings" class="tab-content">
-            <div class="tab-header"><h2>配置</h2></div>
-            <div class="settings-card">
-                <h3>AI 供应商</h3>
-                <form id="settings-form">
-                    <label>Provider
-                        <select id="settings-provider" class="form-input">
-                            <option value="deepseek">Deepseek</option>
-                            <option value="openai">OpenAI</option>
-                            <option value="anthropic">Anthropic</option>
-                        </select>
-                    </label>
-                    <label>API Key <input type="password" id="settings-api-key" placeholder="sk-..."></label>
-                    <label>Base URL <input type="text" id="settings-base-url" value="https://api.deepseek.com"></label>
-                    <label>Daily Limit ($) <input type="number" id="settings-daily-limit" step="0.1"></label>
-                    <label>Monthly Limit ($) <input type="number" id="settings-monthly-limit" step="0.1"></label>
-                    <button type="submit" class="btn-primary">SAVE</button>
-                </form>
-            </div>
-            <div class="settings-card">
-                <h3>System</h3>
-                <label><input type="checkbox" id="settings-autostart"> Auto Start on Boot</label>
+        <!-- ─── TAB: THEMES ─── -->
+        <section id="tab-themes" class="tab-content">
+            <div class="tab-header">
+                <h2>主题</h2>
+                <p class="tab-lede">本地切换、官方主题、社区主题和编辑器都集中在这里。在线市场离线时，本地主题仍可使用。</p>
             </div>
 
-            <!-- ─── APPEARANCE CARD (M4.3) ─── -->
-            <div class="settings-card" id="settings-appearance">
-                <h3>外观</h3>
-                <label>当前主题
-                    <select id="theme-selector" class="form-input">
-                        <option value="builtin-telemetry-ops">Telemetry Ops (默认)</option>
-                    </select>
-                </label>
-                <p style="color:var(--color-grey-50);font-size:12px;margin-top:8px;">
-                    从下方主题市场安装更多主题。
-                </p>
-                <div class="theme-import-area" id="themeDropZone">
-                    <span>拖入 .pulse-theme</span>
-                    <button type="button" class="btn-secondary" id="themeImportBtn">选择文件</button>
-                    <input type="file" id="themeFileInput" accept=".pulse-theme,application/json" hidden>
+            <div class="themes-toolbar">
+                <div class="themes-toolbar-main">
+                    <label>当前主题
+                        <select id="theme-selector" class="form-input">
+                            <option value="gauge-ops">Gauge Ops (默认)</option>
+                        </select>
+                    </label>
+                    <div class="theme-hot-reload-status" id="themeHotReloadStatus">本地主题热更新：未启动</div>
                 </div>
+                <div class="themes-toolbar-actions">
+                    <button type="button" class="btn-secondary" id="themeResetBtn">恢复默认</button>
+                    <button type="button" class="btn-primary" onclick="showThemeMarketplace()">打开主题市场</button>
+                </div>
+            </div>
+
+            <div class="theme-market-card" id="settings-marketplace">
+                <div class="theme-market-header">
+                    <div>
+                        <h3>内置主题市场</h3>
+                        <p>Preview 版本可在无在线服务器时完成本地主题切换和分类验收。</p>
+                    </div>
+                    <button type="button" class="btn-secondary" id="marketplace-refresh-btn">刷新市场</button>
+                </div>
+                <div class="theme-filter-bar" id="theme-filter-bar" role="tablist" aria-label="主题筛选">
+                    <button type="button" class="theme-filter active" data-theme-filter="all">全部</button>
+                    <button type="button" class="theme-filter" data-theme-filter="official">官方</button>
+                    <button type="button" class="theme-filter" data-theme-filter="community">社区</button>
+                    <button type="button" class="theme-filter" data-theme-filter="local">本地</button>
+                    <button type="button" class="theme-filter" data-theme-filter="installed">已安装</button>
+                </div>
+                <div id="marketplace-status" class="marketplace-status">
+                    正在加载主题市场...
+                </div>
+                <div class="marketplace-grid" id="marketplace-grid">
+                    <!-- Theme items rendered by JS -->
+                </div>
+                <div id="marketplace-empty" class="empty-state hidden">
+                    <div class="icon">✦</div>
+                    <div class="text">暂无可用主题</div>
+                </div>
+            </div>
+
+            <div class="theme-workbench-grid">
+                <div class="theme-import-area" id="themeDropZone">
+                    <span>拖入 .pulse-theme 或未来 .gaugepane-theme 文件</span>
+                    <button type="button" class="btn-secondary" id="themeImportBtn">选择文件</button>
+                    <input type="file" id="themeFileInput" accept=".pulse-theme,.gaugepane-theme,application/json" hidden>
+                </div>
+
                 <div class="theme-editor" id="themeEditor">
                     <h4>主题编辑器</h4>
                     <div class="theme-editor-grid">
@@ -401,29 +417,86 @@
                         <label>KPI SIZE <input type="range" id="theme-text-4xl" min="48" max="72" value="56"></label>
                     </div>
                     <div class="form-actions">
-                        <button type="button" class="btn-secondary" id="themeResetBtn">恢复默认</button>
                         <button type="button" class="btn-primary" id="themeExportBtn">导出 .pulse-theme</button>
                     </div>
                 </div>
             </div>
+        </section>
 
-            <!-- ─── MARKETPLACE CARD (M4.4 / M6.5) ─── -->
-            <div class="settings-card" id="settings-marketplace">
-                <h3>主题市场</h3>
-                <div id="marketplace-status" style="color:var(--color-grey-50);font-size:12px;margin-bottom:12px;">
-                    正在加载主题市场...
+        <!-- ─── TAB: SETTINGS ─── -->
+        <section id="tab-settings" class="tab-content">
+            <div class="tab-header"><h2>配置</h2></div>
+            <div class="settings-card">
+                <h3>AI 供应商</h3>
+                <form id="settings-form">
+                    <label>Provider
+                        <select id="settings-provider" class="form-input">
+                            <option value="deepseek">Deepseek</option>
+                            <option value="openai">OpenAI</option>
+                            <option value="anthropic">Anthropic</option>
+                        </select>
+                    </label>
+                    <label><span id="settings-api-key-label">API Platform Key</span> <input type="password" id="settings-api-key" placeholder="sk-..."></label>
+                    <p class="settings-hint" id="settings-provider-help">该 Key 用于供应商 API 平台，不等同于 ChatGPT/Codex 订阅额度。</p>
+                    <div class="settings-inline-notice" id="settings-provider-telemetry">
+                        Deepseek 已接入余额与用量遥测；其他供应商配置会保存，但暂不驱动 Pulse AI widgets。
+                    </div>
+                    <div class="settings-codex-summary" id="settings-codex-summary" role="status">
+                        <div>
+                            <span>Codex 订阅额度</span>
+                            <strong id="codex-inline-status">需在 Codex 查看</strong>
+                        </div>
+                        <button type="button" class="btn-secondary compact" id="codex-jump-btn">查看 Codex 状态</button>
+                    </div>
+                    <label>Base URL <input type="text" id="settings-base-url" value="https://api.deepseek.com"></label>
+                    <label>Daily Limit ($) <input type="number" id="settings-daily-limit" step="0.1"></label>
+                    <label>Monthly Limit ($) <input type="number" id="settings-monthly-limit" step="0.1"></label>
+                    <button type="submit" class="btn-primary">SAVE</button>
+                </form>
+            </div>
+            <div class="settings-card" id="settings-codex">
+                <h3>Codex 订阅状态</h3>
+                <div class="integration-status-grid">
+                    <div class="integration-status-row">
+                        <span>本机 Codex</span>
+                        <strong id="codex-cli-status">检测中...</strong>
+                    </div>
+                    <div class="integration-status-row">
+                        <span>登录状态</span>
+                        <strong id="codex-auth-status">检测中...</strong>
+                    </div>
+                    <div class="integration-status-row">
+                        <span>订阅额度</span>
+                        <strong id="codex-quota-status">需在 Codex 查看</strong>
+                    </div>
                 </div>
-                <div class="marketplace-grid" id="marketplace-grid">
-                    <!-- Theme items rendered by JS -->
+                <p class="settings-hint" id="codex-status-detail">
+                    Pulse 不读取 Codex 认证文件。OpenAI API Key 只能查询 API 平台用量，不能查询 ChatGPT/Codex 订阅额度。
+                </p>
+                <div class="form-actions codex-actions">
+                    <button type="button" class="btn-secondary" id="codex-refresh-btn">刷新状态</button>
+                    <button type="button" class="btn-primary" id="codex-open-usage-btn">打开 Codex 用量页</button>
+                    <button type="button" class="btn-secondary" id="codex-open-app-btn">打开 Codex</button>
                 </div>
-                <div id="marketplace-empty" class="empty-state hidden">
-                    <div class="icon">✦</div>
-                    <div class="text">暂无可用主题</div>
-                </div>
-                <div class="form-actions" style="margin-top:12px;">
-                    <button type="button" class="btn-primary" onclick="showThemeMarketplace()">浏 览 全 部 主 题</button>
-                    <span class="hint" style="margin-left:12px;">弹窗展示完整主题市场</span>
-                </div>
+            </div>
+            <div class="settings-card">
+                <h3>System</h3>
+                <label class="inline-check"><input type="checkbox" id="settings-autostart"> Auto Start on Boot</label>
+            </div>
+
+            <div class="settings-card settings-entry-grid" id="settings-navigation-shortcuts">
+                <button type="button" class="settings-entry" data-welcome-action="themes">
+                    <strong>打开主题</strong>
+                    <span>切换本地主题、浏览官方/社区主题、使用编辑器和热更新。</span>
+                </button>
+                <button type="button" class="settings-entry" data-welcome-action="plugins">
+                    <strong>查看插件</strong>
+                    <span>管理插件、LAN 设备发现、配对和共享指标。</span>
+                </button>
+                <button type="button" class="settings-entry" id="welcome-reopen-btn">
+                    <strong>重新打开欢迎页</strong>
+                    <span>再次查看 GaugePane 的功能导览和配置路径。</span>
+                </button>
             </div>
 
             <!-- ─── ABOUT CARD (M3.7) ─── -->
@@ -445,7 +518,7 @@
                 <div id="plugin-list" class="plugin-grid"></div>
                 <div id="plugin-empty" class="empty-state hidden">
                     <div class="icon">PLUGINS</div>
-                    <div class="text">未发现可用插件</div>
+                    <div class="text">未发现可用插件。插件可扩展 LAN 监看、共享指标和后续设备能力。</div>
                 </div>
             </div>
         </section>
@@ -455,6 +528,45 @@
     <!-- ═══ SCRIPTS ═══ -->
     <script src="js/telemetry-canvas.js?v=3.0.1"></script>
     <script src="js/app.js?v=2.0.9"></script>
+    <!-- ═══ WELCOME OVERLAY ═══ -->
+    <div id="welcome-overlay" class="overlay hidden" aria-modal="true" role="dialog" aria-labelledby="welcome-title">
+        <div class="overlay-content welcome-panel">
+            <div class="welcome-kicker">GaugePane / 仪窗</div>
+            <h1 id="welcome-title">本地运行的 Windows 仪表窗</h1>
+            <p class="welcome-copy">
+                用一块低占用副屏看清本机状态、AI 用量、Codex 状态、局域网设备、主题市场和插件扩展。
+            </p>
+            <div class="welcome-grid">
+                <div class="welcome-item">
+                    <strong>本地系统仪表</strong>
+                    <span>CPU、内存、网络、电池和硬件趋势持续刷新。</span>
+                </div>
+                <div class="welcome-item">
+                    <strong>AI 与 Codex</strong>
+                    <span>配置 DeepSeek/API Platform Key，Codex 额度按官方入口查看。</span>
+                </div>
+                <div class="welcome-item">
+                    <strong>局域网监看</strong>
+                    <span>通过插件发现和配对局域网设备，扩展多设备遥测。</span>
+                </div>
+                <div class="welcome-item">
+                    <strong>主题市场</strong>
+                    <span>切换本地官方主题，离线也能使用预置主题。</span>
+                </div>
+                <div class="welcome-item">
+                    <strong>插件能力</strong>
+                    <span>插件是一级能力入口，不是隐藏高级设置。</span>
+                </div>
+            </div>
+            <div class="welcome-actions">
+                <button type="button" class="btn-primary" data-welcome-action="dashboard">进入仪表盘</button>
+                <button type="button" class="btn-secondary" data-welcome-action="settings">配置 AI</button>
+                <button type="button" class="btn-secondary" data-welcome-action="themes">打开主题</button>
+                <button type="button" class="btn-secondary" data-welcome-action="plugins">查看插件</button>
+                <button type="button" class="btn-secondary" data-welcome-action="dismiss">稍后再说</button>
+            </div>
+        </div>
+    </div>
     <!-- ═══ SETUP OVERLAY ═══ -->
     <div id="setup-overlay" class="overlay hidden">
         <div class="overlay-content setup-wizard">

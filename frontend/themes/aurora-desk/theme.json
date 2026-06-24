@@ -1,0 +1,61 @@
+{
+  "schemaVersion": 3,
+  "id": "aurora-desk",
+  "name": "极光桌面",
+  "version": "1.0.0",
+  "author": "GaugePane Team",
+  "type": "official",
+  "description": "更适合桌搭传播的彩色主题，保留深色仪表底和高识别状态色。",
+  "readability": "深色底上使用青、紫、绿分工表达状态，避免大面积高饱和背景。",
+  "preview": {
+    "category": "official",
+    "icon": "✦",
+    "swatches": ["oklch(15% 0.03 270)", "oklch(75% 0.17 196)", "oklch(72% 0.18 315)"]
+  },
+  "tokens": {
+    "surface": {
+      "base": "oklch(15% 0.03 270)",
+      "panel": "oklch(19% 0.036 270)",
+      "panel2": "oklch(24% 0.042 270)",
+      "elevated": "oklch(29% 0.05 270)",
+      "line": "oklch(43% 0.07 270)",
+      "hairline": "oklch(55% 0.09 270 / 0.34)"
+    },
+    "text": {
+      "primary": "oklch(94% 0.012 270)",
+      "secondary": "oklch(76% 0.03 270)",
+      "muted": "oklch(60% 0.035 270)"
+    },
+    "signal": {
+      "primary": "oklch(75% 0.17 196)",
+      "ai": "oklch(72% 0.18 315)",
+      "system": "oklch(73% 0.15 148)",
+      "warn": "oklch(84% 0.15 92)",
+      "danger": "oklch(66% 0.20 24)"
+    },
+    "chart": {
+      "grid": "oklch(34% 0.045 270 / 0.72)",
+      "glow": "oklch(75% 0.17 196 / 0.28)"
+    },
+    "motion": {
+      "fast": "100ms",
+      "normal": "200ms",
+      "slow": "280ms"
+    },
+    "canvas": {
+      "glow": "oklch(72% 0.18 315 / 0.23)"
+    }
+  },
+  "legacyTokens": {
+    "font-body": "'Inter', 'Segoe UI', system-ui, sans-serif",
+    "font-heading": "'Tektur', 'Inter', system-ui, sans-serif",
+    "font-mono": "'JetBrains Mono', 'Cascadia Mono', monospace",
+    "text-base": "16px",
+    "text-lg": "1.22rem",
+    "text-4xl": "3.55rem"
+  },
+  "marketplace": {
+    "price": 0,
+    "tags": ["official", "aurora", "color", "desk-setup"]
+  }
+}

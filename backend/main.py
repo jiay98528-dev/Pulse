@@ -2,12 +2,23 @@
 import asyncio
 import json
 import io
+import os
+import shutil
+import subprocess
+import threading
+import time
+import webbrowser
 import zipfile
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 from urllib.parse import unquote, urlparse
+
+try:
+    import tomllib
+except ModuleNotFoundError:  # pragma: no cover - Python < 3.11 fallback.
+    tomllib = None
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, UploadFile, File, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -142,6 +153,20 @@ latest_deepseek_data = {
 daily_usage_cache = {}
 net_io_prev = None
 
+CODEX_CLI_TIMEOUT_SECONDS = 2
+CODEX_LOGIN_TIMEOUT_SECONDS = 2
+CODEX_DOCTOR_TIMEOUT_SECONDS = 6
+CODEX_DOCTOR_CACHE_TTL_SECONDS = 120
+CODEX_USAGE_URL = "https://chatgpt.com/codex/settings/usage"
+CODEX_USAGE_HELP_URL = "https://help.openai.com/en/articles/11369540-using-codex-with-your-chatgpt-plan"
+_codex_doctor_lock = threading.Lock()
+_codex_doctor_cache = {
+    "cli_path": "",
+    "timestamp": 0.0,
+    "data": None,
+    "refreshing": False,
+}
+
 
 # ── Helpers ────────────────────────────────────────────
 def get_daily_limit() -> dict:
@@ -173,6 +198,328 @@ def get_uptime_readable(seconds: float) -> str:
     if mins: parts.append(f"{mins}m")
     parts.append(f"{secs}s")
     return " ".join(parts)
+
+
+def _bool_from_codex_detail(value) -> bool:
+    """Codex doctor returns redacted detail values as strings."""
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() in {"true", "yes", "1", "ok"}
+    return bool(value)
+
+
+def _find_nested_value(data, target_key: str):
+    """Find a key inside parsed TOML without exposing neighboring auth values."""
+    if not isinstance(data, dict):
+        return None
+    if target_key in data:
+        return data[target_key]
+    for value in data.values():
+        found = _find_nested_value(value, target_key)
+        if found:
+            return found
+    return None
+
+
+def _iter_codex_cli_candidates():
+    """Yield known Codex CLI candidate paths without reading auth storage."""
+    env_path = os.environ.get("CODEX_CLI_PATH")
+    if env_path:
+        yield env_path, "CODEX_CLI_PATH"
+
+    config_path = Path.home() / ".codex" / "config.toml"
+    if tomllib and config_path.exists():
+        try:
+            parsed = tomllib.loads(config_path.read_text(encoding="utf-8"))
+            configured_path = _find_nested_value(parsed, "CODEX_CLI_PATH")
+            if configured_path:
+                yield str(configured_path), "codex_config"
+        except Exception:
+            pass
+
+    path_candidate = shutil.which("codex")
+    if path_candidate:
+        yield path_candidate, "PATH"
+
+
+def _normalize_cli_path(raw_path: str) -> Optional[Path]:
+    if not raw_path:
+        return None
+    cleaned = str(raw_path).strip().strip('"').strip("'")
+    expanded = os.path.expandvars(os.path.expanduser(cleaned))
+    try:
+        return Path(expanded)
+    except Exception:
+        return None
+
+
+def _codex_creation_flags() -> int:
+    return subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
+
+
+def _short_codex_error(exc: Exception) -> str:
+    message = str(exc).replace("\r", " ").replace("\n", " ").strip()
+    return (message[:180] + "...") if len(message) > 180 else message
+
+
+def _run_codex_command(cli_path: Path, args: list[str], timeout: int) -> dict:
+    try:
+        proc = subprocess.run(
+            [str(cli_path), *args],
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            creationflags=_codex_creation_flags(),
+        )
+        return {
+            "ok": proc.returncode == 0,
+            "returncode": proc.returncode,
+            "stdout": proc.stdout or "",
+            "stderr": proc.stderr or "",
+        }
+    except subprocess.TimeoutExpired:
+        return {"ok": False, "returncode": None, "stdout": "", "stderr": "timeout"}
+    except Exception as exc:
+        return {"ok": False, "returncode": None, "stdout": "", "stderr": _short_codex_error(exc)}
+
+
+def _detect_codex_cli() -> dict:
+    seen: set[str] = set()
+    last_error = ""
+    for raw_path, source in _iter_codex_cli_candidates():
+        cli_path = _normalize_cli_path(raw_path)
+        if not cli_path:
+            continue
+        key = str(cli_path).lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        version_result = _run_codex_command(cli_path, ["--version"], timeout=CODEX_CLI_TIMEOUT_SECONDS)
+        if version_result["ok"]:
+            version = version_result["stdout"].strip() or "unknown"
+            return {
+                "available": True,
+                "path": cli_path,
+                "source": source,
+                "version": version,
+            }
+        last_error = version_result["stderr"] or f"exit {version_result['returncode']}"
+
+    return {
+        "available": False,
+        "path": None,
+        "source": None,
+        "version": "",
+        "error": last_error or "Codex CLI not found",
+    }
+
+
+def _codex_doctor_patch_from_report(report: dict, returncode) -> dict:
+    checks = report.get("checks") or {}
+    auth_check = checks.get("auth.credentials") or {}
+    auth_details = auth_check.get("details") or {}
+    app_check = checks.get("app_server.status") or {}
+    app_details = app_check.get("details") or {}
+    return {
+        "doctor": {
+            "status": "ok",
+            "ok": True,
+            "returncode": returncode,
+            "overall_status": report.get("overallStatus", "unknown"),
+        },
+        "cli": {
+            "version": report.get("codexVersion") or "",
+        },
+        "auth": {
+            "configured": auth_check.get("status") == "ok",
+            "mode": str(auth_details.get("stored auth mode") or ""),
+            "stored_api_key": _bool_from_codex_detail(auth_details.get("stored API key")),
+            "stored_chatgpt_tokens": _bool_from_codex_detail(auth_details.get("stored ChatGPT tokens")),
+        },
+        "app_server": {
+            "status": str(app_details.get("status") or app_check.get("status") or "unknown"),
+            "summary": str(app_check.get("summary") or ""),
+        },
+    }
+
+
+def _collect_codex_doctor_patch(cli_path: Path) -> dict:
+    doctor = _run_codex_command(cli_path, ["doctor", "--json"], timeout=CODEX_DOCTOR_TIMEOUT_SECONDS)
+    if not doctor["stdout"]:
+        return {
+            "doctor": {
+                "status": "timeout" if doctor["stderr"] == "timeout" else "error",
+                "ok": False,
+                "returncode": doctor["returncode"],
+                "error": doctor["stderr"] or "Codex doctor returned no output",
+            }
+        }
+    try:
+        report = json.loads(doctor["stdout"])
+    except json.JSONDecodeError:
+        return {
+            "doctor": {
+                "status": "error",
+                "ok": False,
+                "returncode": doctor["returncode"],
+                "error": "Codex doctor returned invalid JSON",
+            }
+        }
+    return _codex_doctor_patch_from_report(report, doctor["returncode"])
+
+
+def _merge_codex_doctor_patch(result: dict, patch: dict, status_override: Optional[str] = None) -> None:
+    if not patch:
+        return
+    doctor = dict(patch.get("doctor") or {})
+    if status_override:
+        doctor["previous_status"] = doctor.get("status", "unknown")
+        doctor["status"] = status_override
+    result["doctor"] = doctor
+    cli_version = (patch.get("cli") or {}).get("version")
+    if cli_version:
+        result["cli"]["version"] = cli_version
+    if "auth" in patch:
+        result["auth"] = patch["auth"]
+    if "app_server" in patch:
+        result["app_server"] = patch["app_server"]
+
+
+def _refresh_codex_doctor_cache(cli_path: Path) -> None:
+    try:
+        patch = _collect_codex_doctor_patch(cli_path)
+    except Exception as exc:
+        patch = {
+            "doctor": {
+                "status": "error",
+                "ok": False,
+                "returncode": None,
+                "error": _short_codex_error(exc),
+            }
+        }
+    with _codex_doctor_lock:
+        _codex_doctor_cache.update({
+            "cli_path": str(cli_path),
+            "timestamp": time.monotonic(),
+            "data": patch,
+            "refreshing": False,
+        })
+
+
+def _get_or_start_codex_doctor(cli_path: Path) -> tuple[Optional[dict], str, float]:
+    now = time.monotonic()
+    with _codex_doctor_lock:
+        same_cli = _codex_doctor_cache.get("cli_path") == str(cli_path)
+        data = _codex_doctor_cache.get("data") if same_cli else None
+        age = now - float(_codex_doctor_cache.get("timestamp") or 0)
+        fresh = bool(data) and age <= CODEX_DOCTOR_CACHE_TTL_SECONDS
+        if fresh:
+            return data, "cached", age
+        if not _codex_doctor_cache.get("refreshing"):
+            _codex_doctor_cache.update({
+                "cli_path": str(cli_path),
+                "refreshing": True,
+            })
+            thread = threading.Thread(target=_refresh_codex_doctor_cache, args=(cli_path,), daemon=True)
+            thread.start()
+        if data:
+            return data, "cached", age
+    return None, "pending", 0.0
+
+
+def _build_codex_status() -> dict:
+    """Return a redacted local Codex status. No auth files or tokens are read."""
+    detected = _detect_codex_cli()
+    result = {
+        "status": "ok",
+        "available": bool(detected["available"]),
+        "cli": {
+            "available": bool(detected["available"]),
+            "version": detected.get("version", ""),
+            "source": detected.get("source"),
+        },
+        "auth": {
+            "configured": False,
+            "mode": "",
+            "stored_api_key": False,
+            "stored_chatgpt_tokens": False,
+        },
+        "app_server": {
+            "status": "unknown",
+            "summary": "",
+        },
+        "quota": {
+            "available": False,
+            "message": "Codex 订阅额度不能通过 OpenAI API Key 查询；请在 Codex Settings > Usage 或活跃 CLI 会话 /status 查看。",
+            "usage_url": CODEX_USAGE_URL,
+            "help_url": CODEX_USAGE_HELP_URL,
+        },
+    }
+    if not detected["available"]:
+        result["status"] = "unavailable"
+        result["error"] = detected.get("error", "Codex CLI not found")
+        result["doctor"] = {"status": "unavailable", "ok": False}
+        return result
+
+    _apply_codex_login_status(result, detected["path"])
+    patch, doctor_state, age = _get_or_start_codex_doctor(detected["path"])
+    if patch:
+        _merge_codex_doctor_patch(result, patch, "cached" if doctor_state == "cached" else None)
+        result["doctor"]["cache_age_seconds"] = round(age, 1)
+    else:
+        result["doctor"] = {
+            "status": "pending",
+            "ok": False,
+            "message": "Codex doctor is refreshing in the background",
+        }
+    return result
+
+
+def _apply_codex_login_status(result: dict, cli_path: Path) -> None:
+    login = _run_codex_command(cli_path, ["login", "status"], timeout=CODEX_LOGIN_TIMEOUT_SECONDS)
+    result["auth_probe"] = {"ok": bool(login["ok"])}
+    text = ((login["stdout"] or "") + "\n" + (login["stderr"] or "")).strip().lower()
+    if not login["ok"]:
+        return
+    if "logged in" in text:
+        result["auth"]["configured"] = True
+        if "chatgpt" in text:
+            result["auth"]["mode"] = "chatgpt"
+            result["auth"]["stored_chatgpt_tokens"] = True
+        elif "api key" in text or "api-key" in text:
+            result["auth"]["mode"] = "api_key"
+            result["auth"]["stored_api_key"] = True
+    elif "not logged" in text or "not authenticated" in text:
+        result["auth"]["configured"] = False
+
+
+def _launch_codex_app() -> dict:
+    detected = _detect_codex_cli()
+    if not detected["available"]:
+        return {"status": "unavailable", "error": detected.get("error", "Codex CLI not found")}
+    try:
+        subprocess.Popen(
+            [str(detected["path"]), "app"],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            creationflags=_codex_creation_flags(),
+        )
+        return {"status": "ok"}
+    except Exception as exc:
+        return {"status": "error", "error": _short_codex_error(exc)}
+
+
+def _open_codex_usage_page() -> dict:
+    try:
+        opened = webbrowser.open(CODEX_USAGE_URL, new=2, autoraise=True)
+        if not opened:
+            return {"status": "error", "error": "Default browser refused the URL"}
+        return {"status": "ok", "url": CODEX_USAGE_URL}
+    except Exception as exc:
+        return {"status": "error", "error": _short_codex_error(exc)}
 
 
 # ── Background Tasks ──────────────────────────────────
@@ -390,6 +737,32 @@ async def api_health():
         "configured": is_configured(),
         "plugin_manager": plugin_manager is not None,
     }
+
+
+@app.get("/api/integrations/codex/status")
+async def api_codex_status():
+    """Report local Codex installation/auth status without exposing credentials."""
+    return await asyncio.to_thread(_build_codex_status)
+
+
+@app.post("/api/integrations/codex/open")
+async def api_codex_open():
+    """Open the local Codex desktop app via the installed CLI."""
+    result = await asyncio.to_thread(_launch_codex_app)
+    if result.get("status") == "unavailable":
+        raise HTTPException(404, result.get("error", "Codex CLI not found"))
+    if result.get("status") != "ok":
+        raise HTTPException(500, result.get("error", "Failed to launch Codex"))
+    return result
+
+
+@app.post("/api/integrations/codex/open-usage")
+async def api_codex_open_usage():
+    """Open the official Codex usage page. The URL is fixed server-side."""
+    result = await asyncio.to_thread(_open_codex_usage_page)
+    if result.get("status") != "ok":
+        raise HTTPException(500, result.get("error", "Failed to open Codex usage page"))
+    return result
 
 
 CSV_COLUMN_MAP = {

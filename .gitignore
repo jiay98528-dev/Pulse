@@ -4,6 +4,7 @@ __pycache__/
 data/
 build/
 dist/
+打包/
 backend/config.json
 .env
 .DS_Store

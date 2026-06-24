@@ -155,6 +155,20 @@ async function main() {
   const browser = await chromium.launch({ headless: true });
   const page = await browser.newPage({ viewport: { width: 1280, height: 720 } });
   const consoleErrors = [];
+  const officialThemeIds = [
+    'gauge-ops',
+    'frost-console',
+    'amber-terminal',
+    'graphite-studio',
+    'aurora-desk',
+  ];
+
+  await page.addInitScript(() => {
+    if (!sessionStorage.getItem('release-smoke-cleared-welcome')) {
+      localStorage.removeItem('gaugepane-welcome-v1-seen');
+      sessionStorage.setItem('release-smoke-cleared-welcome', '1');
+    }
+  });
 
   page.on('console', (msg) => {
     if (msg.type() === 'error') {
@@ -168,6 +182,19 @@ async function main() {
     await page.goto(urlFor('/?tab=dashboard'), { waitUntil: 'domcontentloaded' });
     await page.waitForSelector('button[data-tab="dashboard"].active');
     await page.waitForSelector('#tab-dashboard.active');
+    await page.waitForSelector('#welcome-overlay:not(.hidden)');
+    await page.click('#welcome-overlay [data-welcome-action="themes"]');
+    await page.waitForSelector('button[data-tab="themes"].active');
+    await page.waitForSelector('#tab-themes.active');
+    const welcomeSeen = await page.evaluate(() => localStorage.getItem('gaugepane-welcome-v1-seen'));
+    assert(welcomeSeen === '1', 'Welcome CTA did not persist gaugepane-welcome-v1-seen');
+    console.log('[ok] welcome first-run CTA');
+
+    await page.goto(urlFor('/?tab=dashboard'), { waitUntil: 'domcontentloaded' });
+    await page.waitForSelector('button[data-tab="dashboard"].active');
+    await page.waitForSelector('#tab-dashboard.active');
+    const welcomeHidden = await page.$eval('#welcome-overlay', (el) => el.classList.contains('hidden'));
+    assert(welcomeHidden, 'Welcome overlay appeared again after being dismissed');
 
     const dashboardCanvases = [
       'heroAiCanvas',
@@ -200,25 +227,73 @@ async function main() {
     await page.waitForSelector('#tab-analysis.active');
     console.log('[ok] analysis tab URL');
 
+    await page.goto(urlFor('/?tab=themes'), { waitUntil: 'domcontentloaded' });
+    await page.waitForSelector('button[data-tab="themes"].active');
+    await page.waitForSelector('#tab-themes.active');
+    await page.waitForFunction((ids) => {
+      const options = Array.from(document.querySelectorAll('#theme-selector option')).map((o) => o.value);
+      return ids.every((id) => options.includes(id));
+    }, officialThemeIds, { timeout: 10000 });
+    for (const id of officialThemeIds) {
+      await page.selectOption('#theme-selector', id);
+      await page.waitForFunction((themeId) => localStorage.getItem('pulse-active-theme-id') === themeId, id);
+    }
+    const filterNames = ['official', 'community', 'local', 'installed'];
+    for (const filter of filterNames) {
+      await page.click(`[data-theme-filter="${filter}"]`);
+      await page.waitForFunction(() => {
+        const grid = document.querySelector('#marketplace-grid');
+        const empty = document.querySelector('#marketplace-empty');
+        const status = document.querySelector('#marketplace-status');
+        return (grid && grid.children.length >= 0) &&
+          ((empty && !empty.classList.contains('hidden')) || (status && status.textContent.trim().length > 0));
+      });
+    }
+    console.log('[ok] themes tab URL, official themes, filters');
+
+    const storeOnline = await isStoreReachable();
+    if (!storeOnline) {
+      await page.click('[data-theme-filter="all"]');
+      const status = await waitTextMatch(
+        page,
+        '#marketplace-status',
+        /在线市场离线，本地主题仍可使用|8081/,
+        10000
+      );
+      await page.waitForFunction(() => {
+        return document.querySelectorAll('#marketplace-grid .marketplace-item').length > 0;
+      }, null, { timeout: 10000 });
+      const itemCount = await page.$$eval('#marketplace-grid .marketplace-item', (items) => items.length);
+      assert(itemCount > 0, 'Offline marketplace did not render local themes');
+      console.log('[ok] marketplace offline state', status.trim());
+    } else {
+      console.log('[skip] marketplace offline state because store is reachable');
+    }
+
     await page.goto(urlFor('/#plugins'), { waitUntil: 'domcontentloaded' });
     await page.waitForSelector('button[data-tab="plugins"].active');
     await page.waitForSelector('#tab-plugins.active');
     console.log('[ok] plugins hash URL');
 
-    const storeOnline = await isStoreReachable();
     await page.goto(urlFor('/?tab=settings'), { waitUntil: 'domcontentloaded' });
     await page.waitForSelector('#tab-settings.active');
-    if (!storeOnline) {
-      const status = await waitTextMatch(
-        page,
-        '#marketplace-status',
-        /主题商店离线|离线|8081|本地可用主题/,
-        10000
-      );
-      console.log('[ok] marketplace offline state', status.trim());
-    } else {
-      console.log('[skip] marketplace offline state because store is reachable');
+    await page.click('#welcome-reopen-btn');
+    await page.waitForSelector('#welcome-overlay:not(.hidden)');
+    await page.click('[data-welcome-action="dismiss"]');
+    await page.waitForFunction(() => document.querySelector('#welcome-overlay')?.classList.contains('hidden'));
+    console.log('[ok] settings welcome reopen');
+
+    const instancesBefore = await page.evaluate(() => window.TelemetryCanvas?.instances?.().length || 0);
+    for (const tab of ['dashboard', 'themes', 'hardware', 'analysis', 'plugins', 'settings']) {
+      await page.click(`button[data-tab="${tab}"]`);
+      await page.waitForSelector(`#tab-${tab}.active`);
     }
+    const instancesAfter = await page.evaluate(() => window.TelemetryCanvas?.instances?.().length || 0);
+    assert(
+      instancesAfter <= instancesBefore + 1,
+      `TelemetryCanvas instances grew unexpectedly: before=${instancesBefore} after=${instancesAfter}`
+    );
+    console.log('[ok] TelemetryCanvas instance count stable', { before: instancesBefore, after: instancesAfter });
 
     assert(consoleErrors.length === 0, `Console errors: ${consoleErrors.join('\n')}`);
   } finally {

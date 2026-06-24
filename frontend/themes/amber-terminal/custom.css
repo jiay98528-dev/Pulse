@@ -1,0 +1,8 @@
+.header,
+#titlebar {
+  border-color: var(--signal-primary);
+}
+
+.telemetry-canvas {
+  filter: sepia(0.16) saturate(1.08);
+}

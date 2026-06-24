@@ -1,0 +1,61 @@
+{
+  "schemaVersion": 3,
+  "id": "graphite-studio",
+  "name": "石墨工位",
+  "version": "1.0.0",
+  "author": "GaugePane Team",
+  "type": "official",
+  "description": "石墨灰极简专业工位，适合需要低干扰、稳定扫视的工作环境。",
+  "readability": "中性深灰层级、白灰文字和少量青绿状态色，降低视觉噪声。",
+  "preview": {
+    "category": "official",
+    "icon": "▤",
+    "swatches": ["oklch(19% 0.006 250)", "oklch(71% 0.10 190)", "oklch(70% 0.10 150)"]
+  },
+  "tokens": {
+    "surface": {
+      "base": "oklch(19% 0.006 250)",
+      "panel": "oklch(23% 0.008 250)",
+      "panel2": "oklch(27% 0.01 250)",
+      "elevated": "oklch(31% 0.012 250)",
+      "line": "oklch(43% 0.015 250)",
+      "hairline": "oklch(48% 0.016 250 / 0.36)"
+    },
+    "text": {
+      "primary": "oklch(91% 0.004 250)",
+      "secondary": "oklch(73% 0.006 250)",
+      "muted": "oklch(58% 0.006 250)"
+    },
+    "signal": {
+      "primary": "oklch(71% 0.10 190)",
+      "ai": "oklch(70% 0.11 265)",
+      "system": "oklch(70% 0.10 150)",
+      "warn": "oklch(78% 0.11 86)",
+      "danger": "oklch(64% 0.15 24)"
+    },
+    "chart": {
+      "grid": "oklch(35% 0.012 250 / 0.74)",
+      "glow": "oklch(71% 0.10 190 / 0.18)"
+    },
+    "motion": {
+      "fast": "100ms",
+      "normal": "200ms",
+      "slow": "280ms"
+    },
+    "canvas": {
+      "glow": "oklch(71% 0.10 190 / 0.18)"
+    }
+  },
+  "legacyTokens": {
+    "font-body": "'Inter', 'Segoe UI', system-ui, sans-serif",
+    "font-heading": "'Inter', 'Segoe UI', system-ui, sans-serif",
+    "font-mono": "'JetBrains Mono', 'Cascadia Mono', monospace",
+    "text-base": "15px",
+    "text-lg": "1.16rem",
+    "text-4xl": "3.3rem"
+  },
+  "marketplace": {
+    "price": 0,
+    "tags": ["official", "graphite", "minimal", "studio"]
+  }
+}

@@ -1,0 +1,11 @@
+.card,
+.telemetry-panel,
+.settings-card,
+.theme-market-card,
+.themes-toolbar {
+  border-width: 1px;
+}
+
+.header-title {
+  letter-spacing: 0.08em;
+}

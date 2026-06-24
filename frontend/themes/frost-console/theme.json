@@ -1,0 +1,61 @@
+{
+  "schemaVersion": 3,
+  "id": "frost-console",
+  "name": "霜白控制台",
+  "version": "1.0.0",
+  "author": "GaugePane Team",
+  "type": "official",
+  "description": "浅色冷调低噪工作台，适合白天办公和浅色桌搭。",
+  "readability": "浅色底、高对比深色文字，状态色降低饱和度以减少长时间观看疲劳。",
+  "preview": {
+    "category": "official",
+    "icon": "◇",
+    "swatches": ["oklch(96% 0.012 230)", "oklch(62% 0.12 215)", "oklch(58% 0.10 160)"]
+  },
+  "tokens": {
+    "surface": {
+      "base": "oklch(96% 0.012 230)",
+      "panel": "oklch(92% 0.016 230)",
+      "panel2": "oklch(88% 0.018 230)",
+      "elevated": "oklch(98% 0.006 230)",
+      "line": "oklch(72% 0.028 230)",
+      "hairline": "oklch(70% 0.03 230 / 0.42)"
+    },
+    "text": {
+      "primary": "oklch(24% 0.025 235)",
+      "secondary": "oklch(42% 0.03 235)",
+      "muted": "oklch(56% 0.028 235)"
+    },
+    "signal": {
+      "primary": "oklch(62% 0.12 215)",
+      "ai": "oklch(60% 0.13 285)",
+      "system": "oklch(58% 0.10 160)",
+      "warn": "oklch(68% 0.12 80)",
+      "danger": "oklch(58% 0.16 25)"
+    },
+    "chart": {
+      "grid": "oklch(76% 0.018 230 / 0.72)",
+      "glow": "oklch(62% 0.12 215 / 0.18)"
+    },
+    "motion": {
+      "fast": "100ms",
+      "normal": "200ms",
+      "slow": "280ms"
+    },
+    "canvas": {
+      "glow": "oklch(62% 0.12 215 / 0.16)"
+    }
+  },
+  "legacyTokens": {
+    "font-body": "'Inter', 'Segoe UI', system-ui, sans-serif",
+    "font-heading": "'Inter', 'Segoe UI', system-ui, sans-serif",
+    "font-mono": "'JetBrains Mono', 'Cascadia Mono', monospace",
+    "text-base": "15px",
+    "text-lg": "1.18rem",
+    "text-4xl": "3.35rem"
+  },
+  "marketplace": {
+    "price": 0,
+    "tags": ["official", "light", "workbench", "frost"]
+  }
+}

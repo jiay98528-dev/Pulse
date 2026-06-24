@@ -46,6 +46,7 @@ const state = {
     setupRequired: true,
     deepseekConfigured: false,
     tabReloadState: {},
+    codexStatus: null,
 };
 
 const AI_PROVIDERS = {
@@ -55,20 +56,35 @@ const AI_PROVIDERS = {
         baseField: 'deepseek_base_url',
         defaultBaseUrl: 'https://api.deepseek.com',
         keyPlaceholder: 'sk-...',
+        keyLabel: 'Deepseek API Platform Key',
+        keyHelp: '用于 Deepseek API 余额与本地导入用量分析，不是 ChatGPT/Codex 订阅额度。',
+        telemetry: 'active',
+        telemetryHelp: 'Deepseek 已接入 Pulse 余额、费用和用量遥测；保存后会驱动 AI widgets。',
+        saveMessage: 'Deepseek 配置已保存，AI 余额与用量遥测可用。',
     },
     openai: {
-        label: 'OpenAI',
+        label: 'OpenAI API',
         keyField: 'openai_api_key',
         baseField: 'openai_base_url',
         defaultBaseUrl: 'https://api.openai.com',
         keyPlaceholder: 'sk-...',
+        keyLabel: 'OpenAI API Platform Key',
+        keyHelp: 'OpenAI API Key 只用于 API Platform 用量/成本，不等同于 ChatGPT/Codex 订阅额度。',
+        telemetry: 'saved_only',
+        telemetryHelp: 'OpenAI 配置当前仅保存供后续扩展使用，尚未接入 Pulse 余额/用量 widgets；Codex 订阅额度请在 Codex 查看。',
+        saveMessage: 'OpenAI API 配置已保存；Pulse 暂未接入 OpenAI 用量遥测。',
     },
     anthropic: {
-        label: 'Anthropic',
+        label: 'Anthropic API',
         keyField: 'anthropic_api_key',
         baseField: 'anthropic_base_url',
         defaultBaseUrl: 'https://api.anthropic.com',
         keyPlaceholder: 'sk-ant-...',
+        keyLabel: 'Anthropic API Platform Key',
+        keyHelp: '用于 Anthropic API 配置，不影响 Codex 或 OpenAI ChatGPT 订阅额度。',
+        telemetry: 'saved_only',
+        telemetryHelp: 'Anthropic 配置当前仅保存供后续扩展使用，尚未接入 Pulse 余额/用量 widgets。',
+        saveMessage: 'Anthropic API 配置已保存；Pulse 暂未接入 Anthropic 用量遥测。',
     },
 };
 
@@ -1131,7 +1147,7 @@ function handleMessage(msg) {
 }
 
 // ── Tab Switching ────────────────────────────────────
-const VALID_TABS = ['dashboard', 'hardware', 'analysis', 'settings', 'plugins'];
+const VALID_TABS = ['dashboard', 'hardware', 'analysis', 'themes', 'plugins', 'settings'];
 
 function normalizeTab(tab) {
     tab = String(tab || '').replace(/^#/, '').replace(/^tab-/, '').trim();
@@ -1189,13 +1205,12 @@ function refreshTabData(tab) {
         } else {
             loadAnalysisData();
         }
-    } else if (tab === 'settings') {
+    } else if (tab === 'themes') {
         setTimeout(function() {
-            var grid = document.getElementById('marketplace-grid');
-            if (grid && grid.children.length === 0) {
-                loadMarketplace();
-            }
+            refreshThemeSurface({ forceMarketplace: true });
         }, 100);
+    } else if (tab === 'settings') {
+        refreshSettingsShortcuts();
     } else if (tab === 'plugins') {
         setTimeout(loadPlugins, 100);
     }
@@ -1214,7 +1229,11 @@ function activateTab(tab, options) {
     });
 
     if (options.syncUrl) syncTabUrl(tab);
+    updateSetupNotice(!state.setupRequired);
     refreshTabData(tab);
+    if (ThemeHotReloadController && ThemeHotReloadController.handleContextChange) {
+        ThemeHotReloadController.handleContextChange();
+    }
     setTimeout(resizeVisibleCharts, 80);
     setTimeout(resizeVisibleCharts, 220);
 }
@@ -2317,8 +2336,17 @@ function renderProviderSettings(provider) {
     var cfg = state.config || {};
     var providerEl = document.getElementById('settings-provider');
     var keyEl = document.getElementById('settings-api-key');
+    var keyLabelEl = document.getElementById('settings-api-key-label');
+    var providerHelpEl = document.getElementById('settings-provider-help');
+    var telemetryEl = document.getElementById('settings-provider-telemetry');
     var baseEl = document.getElementById('settings-base-url');
     if (providerEl) providerEl.value = provider;
+    if (keyLabelEl) keyLabelEl.textContent = meta.keyLabel || (meta.label + ' API Platform Key');
+    if (providerHelpEl) providerHelpEl.textContent = meta.keyHelp || '该 Key 用于供应商 API 平台，不等同于 ChatGPT/Codex 订阅额度。';
+    if (telemetryEl) {
+        telemetryEl.textContent = meta.telemetryHelp || '';
+        telemetryEl.classList.toggle('is-saved-only', meta.telemetry === 'saved_only');
+    }
     if (keyEl) {
         var configured = !!(cfg.configured_providers && cfg.configured_providers[provider]);
         keyEl.value = '';
@@ -2483,7 +2511,7 @@ function updateSetupNotice(configured) {
   state.setupRequired = !configured;
   if (overlay) overlay.classList.add("hidden");
   if (!banner) return;
-  if (configured || dismissed) banner.classList.add("hidden");
+  if (configured || dismissed || state.activeTab === "settings") banner.classList.add("hidden");
   else banner.classList.remove("hidden");
 }
 
@@ -2512,6 +2540,64 @@ function initSetupBanner() {
       if (keyEl) setTimeout(function() { keyEl.focus(); }, 120);
     };
   }
+}
+
+const WELCOME_SEEN_KEY = 'gaugepane-welcome-v1-seen';
+
+function showWelcomeOverlay() {
+  var overlay = document.getElementById("welcome-overlay");
+  if (!overlay) return;
+  overlay.classList.remove("hidden");
+}
+
+function hideWelcomeOverlay(markSeen) {
+  var overlay = document.getElementById("welcome-overlay");
+  if (overlay) overlay.classList.add("hidden");
+  if (markSeen) localStorage.setItem(WELCOME_SEEN_KEY, "1");
+}
+
+function handleWelcomeAction(action) {
+  if (action === "dismiss") {
+    hideWelcomeOverlay(true);
+    return;
+  }
+  var tab = normalizeTab(action);
+  hideWelcomeOverlay(true);
+  activateTab(tab, { syncUrl: true });
+  if (tab === "settings") {
+    var keyEl = document.getElementById("settings-api-key");
+    if (keyEl) setTimeout(function() { keyEl.focus(); }, 120);
+  }
+}
+
+function initWelcomeOverlay() {
+  document.querySelectorAll("[data-welcome-action]").forEach(function(btn) {
+    btn.addEventListener("click", function() {
+      handleWelcomeAction(btn.dataset.welcomeAction);
+    });
+  });
+  var reopen = document.getElementById("welcome-reopen-btn");
+  if (reopen) {
+    reopen.addEventListener("click", function() {
+      showWelcomeOverlay();
+    });
+  }
+  var overlay = document.getElementById("welcome-overlay");
+  if (overlay) {
+    overlay.addEventListener("click", function(e) {
+      if (e.target === overlay) hideWelcomeOverlay(true);
+    });
+  }
+}
+
+function maybeShowWelcomeOverlay() {
+  if (localStorage.getItem(WELCOME_SEEN_KEY) === "1") return;
+  setTimeout(showWelcomeOverlay, 180);
+}
+
+function refreshSettingsShortcuts() {
+  var shortcuts = document.getElementById("settings-navigation-shortcuts");
+  if (shortcuts) shortcuts.setAttribute("aria-label", "设置页快捷入口");
 }
 
 // --- Setup Form ---
@@ -2565,7 +2651,7 @@ function initSettingsForm() {
       body: JSON.stringify(payload)
     }).then(function(r) {
       if (r.ok) {
-        showToast("Config saved","success");
+        showToast(meta.saveMessage || "Config saved", "success");
         loadConfig();
       }
       else showToast("Save failed","error");
@@ -2588,12 +2674,146 @@ function initAutostartToggle() {
   };
 }
 
+// --- Codex Integration Status ---
+var CODEX_USAGE_URL = 'https://chatgpt.com/codex/settings/usage';
+var CODEX_USAGE_HELP_URL = 'https://help.openai.com/en/articles/11369540-using-codex-with-your-chatgpt-plan';
+
+function setStatusRowState(el, stateName) {
+  if (!el) return;
+  el.classList.remove('is-ok', 'is-warn', 'is-error');
+  if (stateName) el.classList.add('is-' + stateName);
+}
+
+function renderCodexStatus(status) {
+  var cliEl = document.getElementById('codex-cli-status');
+  var authEl = document.getElementById('codex-auth-status');
+  var quotaEl = document.getElementById('codex-quota-status');
+  var detailEl = document.getElementById('codex-status-detail');
+  var inlineEl = document.getElementById('codex-inline-status');
+  var cliRow = cliEl ? cliEl.closest('.integration-status-row') : null;
+  var authRow = authEl ? authEl.closest('.integration-status-row') : null;
+  var quotaRow = quotaEl ? quotaEl.closest('.integration-status-row') : null;
+
+  if (!status) {
+    if (cliEl) cliEl.textContent = '检测失败';
+    if (authEl) authEl.textContent = '未知';
+    if (quotaEl) quotaEl.textContent = '需在 Codex 查看';
+    if (inlineEl) inlineEl.textContent = '检测失败，仍需在 Codex 查看';
+    if (detailEl) detailEl.textContent = '无法读取本机 Codex 状态。Pulse 不读取认证文件，也不会尝试抓取私有接口。';
+    setStatusRowState(cliRow, 'error');
+    setStatusRowState(authRow, 'warn');
+    setStatusRowState(quotaRow, 'warn');
+    return;
+  }
+
+  var available = !!(status.available || (status.cli && status.cli.available));
+  var auth = status.auth || {};
+  var version = status.cli && status.cli.version ? status.cli.version : '';
+  if (cliEl) cliEl.textContent = available ? ('已检测到' + (version ? ' · ' + version : '')) : '未检测到 Codex';
+  if (authEl) {
+    if (!available) authEl.textContent = '未检测';
+    else if (auth.configured && auth.stored_chatgpt_tokens) authEl.textContent = '已登录 ChatGPT';
+    else if (auth.configured && auth.stored_api_key) authEl.textContent = '已配置 API Key 模式';
+    else authEl.textContent = '未登录';
+  }
+  if (quotaEl) quotaEl.textContent = '官方用量页或 /status';
+  if (inlineEl) {
+    if (!available) inlineEl.textContent = '未检测到 Codex CLI';
+    else if (auth.configured) inlineEl.textContent = '已检测登录，额度仍需在 Codex 查看';
+    else inlineEl.textContent = '未登录，额度需在 Codex 查看';
+  }
+  if (detailEl) {
+    var appStatus = status.app_server && status.app_server.status ? status.app_server.status : 'unknown';
+    var doctor = status.doctor || {};
+    var doctorText = '';
+    if (doctor.status === 'pending') {
+      doctorText = '深度诊断正在后台刷新。';
+    } else if (doctor.status === 'cached') {
+      doctorText = '深度诊断使用缓存结果' + (doctor.cache_age_seconds ? '（' + doctor.cache_age_seconds + ' 秒前）' : '') + '。';
+    } else if (doctor.status === 'timeout') {
+      doctorText = '深度诊断超时，基础登录状态仍可用。';
+    } else if (doctor.status === 'error') {
+      doctorText = '深度诊断失败，基础登录状态仍可用。';
+    }
+    detailEl.textContent = available
+      ? 'Pulse 已检测本机 Codex 状态。订阅额度无公开本地 JSON 接口，请在 Codex Settings > Usage 或活跃 CLI 会话 /status 查看；OpenAI API Key 只对应 API Platform 用量。App server: ' + appStatus + '。' + doctorText
+      : '未检测到可执行的 Codex CLI。订阅额度不能通过 OpenAI API Key 查询；安装并登录 Codex 后，可在 Codex Settings > Usage 或活跃 CLI 会话 /status 查看。';
+  }
+  setStatusRowState(cliRow, available ? 'ok' : 'error');
+  setStatusRowState(authRow, available && auth.configured ? 'ok' : 'warn');
+  setStatusRowState(quotaRow, 'warn');
+}
+
+async function loadCodexStatus() {
+  var detailEl = document.getElementById('codex-status-detail');
+  if (detailEl) detailEl.textContent = '正在检测本机 Codex CLI 与登录状态...';
+  try {
+    var resp = await fetch(apiUrl('/api/integrations/codex/status'), { cache: 'no-store' });
+    if (!resp.ok) throw new Error('HTTP ' + resp.status);
+    var status = await resp.json();
+    state.codexStatus = status;
+    renderCodexStatus(status);
+  } catch (e) {
+    state.codexStatus = null;
+    renderCodexStatus(null);
+  }
+}
+
+async function openCodexUsagePage() {
+  var url = (state.codexStatus && state.codexStatus.quota && state.codexStatus.quota.usage_url) || CODEX_USAGE_URL;
+  try {
+    var resp = await fetch(apiUrl('/api/integrations/codex/open-usage'), { method: 'POST' });
+    if (resp.ok) {
+      showToast('正在打开 Codex 用量页', 'success');
+      return;
+    }
+  } catch (e) {
+    /* Browser fallback below. */
+  }
+  var opened = window.open(url, '_blank', 'noopener,noreferrer');
+  if (opened) {
+    showToast('已在浏览器打开 Codex 用量页', 'info');
+  } else {
+    showToast('无法打开 Codex 用量页，请在 Codex Settings > Usage 查看', 'error');
+  }
+}
+
+async function openCodexApp() {
+  try {
+    var resp = await fetch(apiUrl('/api/integrations/codex/open'), { method: 'POST' });
+    if (!resp.ok) {
+      var err = await resp.json().catch(function() { return {}; });
+      throw new Error(err.detail || '无法启动 Codex');
+    }
+    showToast('正在打开 Codex', 'success');
+  } catch (e) {
+    showToast('无法打开 Codex: ' + e.message, 'error');
+  }
+}
+
+function initCodexIntegration() {
+  var refreshBtn = document.getElementById('codex-refresh-btn');
+  var usageBtn = document.getElementById('codex-open-usage-btn');
+  var appBtn = document.getElementById('codex-open-app-btn');
+  var jumpBtn = document.getElementById('codex-jump-btn');
+  if (refreshBtn) refreshBtn.addEventListener('click', loadCodexStatus);
+  if (usageBtn) usageBtn.addEventListener('click', openCodexUsagePage);
+  if (appBtn) appBtn.addEventListener('click', openCodexApp);
+  if (jumpBtn) {
+    jumpBtn.addEventListener('click', function() {
+      var card = document.getElementById('settings-codex');
+      if (card) card.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    });
+  }
+  loadCodexStatus();
+}
+
 // ══════════════════════════════════════════════════
 //  Theme Engine (M4.1)
 //  JSON→CSS变量→图表重绘
 // ══════════════════════════════════════════════════
 const STORE_API = 'http://127.0.0.1:8081'; // 商店后端地址
-const STORE_OFFLINE_MESSAGE = '主题商店离线，请启动 127.0.0.1:8081 服务后重试。';
+const STORE_OFFLINE_MESSAGE = '在线市场离线，本地主题仍可使用。需要在线下载或购买时请启动 127.0.0.1:8081。';
 
 async function storeFetch(path, options) {
     try {
@@ -2617,24 +2837,32 @@ var ThemeEngine = {
     activeThemeId: null,
     installedThemes: {},
     schemaVersion: 3,
-    defaultThemeId: 'builtin-telemetry-ops',
+    defaultThemeId: 'gauge-ops',
+    officialGateThemeIds: ['gauge-ops', 'frost-console', 'amber-terminal', 'graphite-studio', 'aurora-desk'],
+    legacyThemeAliases: {
+        'builtin-telemetry-ops': 'gauge-ops',
+    },
+    _suppressPersist: false,
     layoutKey: 'pulse-ui-layout-v3',
     legacyLayoutKey: 'pulse-widget-layout',
 
     init: function() {
         var builtins = this._builtinThemes();
+        this._suppressPersist = true;
         for (var i = 0; i < builtins.length; i++) {
             this._registerTheme(this._normalizeThemePayload(builtins[i], 'builtin'), true);
         }
 
         this._loadInstalledThemes();
+        this._suppressPersist = false;
+        this._persistInstalledThemes();
         this._migrateLegacyLayout();
         this._discoverLocal();
         this._populateSelector();
 
         var rawTokens = localStorage.getItem('pulse-theme-tokens');
         var rawLegacyTokens = localStorage.getItem('pulse-theme-legacy-tokens');
-        var activeId = localStorage.getItem('pulse-active-theme-id') || this.defaultThemeId;
+        var activeId = this._resolveThemeId(localStorage.getItem('pulse-active-theme-id') || this.defaultThemeId);
         var legacySchema = parseInt(localStorage.getItem('pulse-theme-schema-version'), 10);
         var customCSS = localStorage.getItem('pulse-theme-custom-css') || '';
         var activeTheme = this.installedThemes[activeId];
@@ -2643,7 +2871,7 @@ var ThemeEngine = {
             try {
                 var parsed = JSON.parse(rawTokens);
                 var payload = {
-                    id: activeId,
+                id: activeId,
                     name: (activeTheme && activeTheme.name) || 'Custom Theme',
                     author: (activeTheme && activeTheme.author) || 'Local',
                     type: (activeTheme && activeTheme.type) || 'custom',
@@ -2652,6 +2880,7 @@ var ThemeEngine = {
                     tokens: parsed,
                     legacyTokens: rawLegacyTokens ? JSON.parse(rawLegacyTokens) : null,
                     customCSS: customCSS,
+                    _localPath: activeTheme && activeTheme._localPath,
                 };
                 this.activate(this._normalizeThemePayload(payload, 'stored'));
                 return;
@@ -2665,15 +2894,27 @@ var ThemeEngine = {
         }
     },
 
+    _resolveThemeId: function(id) {
+        if (!id) return this.defaultThemeId;
+        return this.legacyThemeAliases[id] || id;
+    },
+
     _builtinThemes: function() {
         return [
             {
-                id: 'builtin-telemetry-ops',
-                name: 'Telemetry Ops',
-                author: 'Pulse Team',
+                id: 'gauge-ops',
+                name: 'Gauge Ops',
+                author: 'GaugePane Team',
                 type: 'official',
                 schemaVersion: 3,
                 legacyCompatible: true,
+                description: '默认深色遥测仪表主题，适合 Surface Go 副屏常驻扫视。',
+                preview: {
+                    category: 'official',
+                    swatches: ['oklch(14% 0.015 250)', 'oklch(72% 0.16 205)', 'oklch(76% 0.17 305)'],
+                    icon: '◷',
+                },
+                readability: '深色背景、高对比文字、关键状态采用青蓝/紫/绿区分。',
                 tokens: {
                     surface: {
                         base: 'oklch(14% 0.015 250)',
@@ -2802,6 +3043,8 @@ var ThemeEngine = {
 
     _registerTheme: function(theme, isBuiltin) {
         if (!theme || !theme.id) return;
+        theme.id = this._resolveThemeId(theme.id);
+        if (isBuiltin && this.installedThemes[theme.id] && this.installedThemes[theme.id].builtin) return;
         if (!theme.name) theme.name = theme.id;
         if (!theme.author) theme.author = 'Local';
         if (!theme.type) theme.type = isBuiltin ? 'official' : 'custom';
@@ -2810,7 +3053,7 @@ var ThemeEngine = {
         theme.installedAt = theme.installedAt || Date.now();
         if (typeof theme.schemaVersion !== 'number') theme.schemaVersion = this.schemaVersion;
         this.installedThemes[theme.id] = theme;
-        this._persistInstalledThemes();
+        if (!this._suppressPersist) this._persistInstalledThemes();
     },
 
     _persistInstalledThemes: function() {
@@ -2820,6 +3063,10 @@ var ThemeEngine = {
     _discoverLocal: function() {
         var self = this;
         var LOCAL_THEMES = [
+            { id: 'frost-console', path: 'themes/frost-console/theme.json' },
+            { id: 'amber-terminal', path: 'themes/amber-terminal/theme.json' },
+            { id: 'graphite-studio', path: 'themes/graphite-studio/theme.json' },
+            { id: 'aurora-desk', path: 'themes/aurora-desk/theme.json' },
             { id: 'mediterranean', path: 'themes/mediterranean/theme.json' },
             { id: 'editorial', path: 'themes/editorial/theme.json' },
         ];
@@ -2832,6 +3079,9 @@ var ThemeEngine = {
                     theme._localPath = entry.path;
                     self._registerTheme(self._normalizeThemePayload(theme, 'local'), false);
                     self._populateSelector();
+                    if (state.activeTab === 'themes' && typeof refreshThemeSurface === 'function') {
+                        refreshThemeSurface({ forceMarketplace: false });
+                    }
                 })
                 .catch(function() {});
         });
@@ -2840,17 +3090,30 @@ var ThemeEngine = {
     _populateSelector: function() {
         var sel = document.getElementById('theme-selector');
         if (!sel) return;
-        while (sel.options.length > 1) sel.remove(1);
+        while (sel.options.length) sel.remove(0);
         var self = this;
-        Object.keys(this.installedThemes).forEach(function(id) {
+        var ids = Object.keys(this.installedThemes);
+        ids.sort(function(a, b) {
+            if (a === self.defaultThemeId) return -1;
+            if (b === self.defaultThemeId) return 1;
+            return a.localeCompare(b);
+        });
+        ids.forEach(function(id) {
             var theme = self.installedThemes[id];
             if (!theme) return;
             var opt = document.createElement('option');
             opt.value = id;
-            opt.textContent = (theme.name || id) + (theme.legacyCompatible ? ' (Legacy)' : '') + (theme._localPath ? ' [本地]' : '');
+            var tags = [];
+            if (theme._localPath) tags.push('本地热更新');
+            if (theme.legacyCompatible && id !== self.defaultThemeId) tags.push('旧主题兼容');
+            opt.textContent = (theme.name || id) + (tags.length ? ' [' + tags.join(' · ') + ']' : '');
             sel.appendChild(opt);
         });
-        if (this.activeThemeId) sel.value = this.activeThemeId;
+        if (this.activeThemeId && this.installedThemes[this.activeThemeId]) {
+            sel.value = this.activeThemeId;
+        } else if (this.installedThemes[this.defaultThemeId]) {
+            sel.value = this.defaultThemeId;
+        }
     },
 
     _syncLegacyAliases: function() {
@@ -2894,6 +3157,12 @@ var ThemeEngine = {
                 }
             }
         });
+        Object.keys(tokens).forEach(function(key) {
+            if (groups[key]) return;
+            if (tokens[key] !== undefined && tokens[key] !== null && typeof tokens[key] !== 'object') {
+                flat[this._normalizeTokenKey(key)] = tokens[key];
+            }
+        }.bind(this));
         return flat;
     },
 
@@ -2957,6 +3226,10 @@ var ThemeEngine = {
             name: rawTheme.name || rawTheme.id || 'Custom Theme',
             author: rawTheme.author || 'Local',
             type: rawTheme.type || 'custom',
+            description: rawTheme.description || '',
+            preview: rawTheme.preview || rawTheme.marketplacePreview || null,
+            readability: rawTheme.readability || '',
+            marketplace: rawTheme.marketplace || null,
             schemaVersion: Number(rawTheme.schemaVersion) || this.schemaVersion,
             installedAt: rawTheme.installedAt || Date.now(),
             legacyCompatible: !!rawTheme.legacyCompatible,
@@ -2966,6 +3239,7 @@ var ThemeEngine = {
             legacyTokens: null,
             tokens: null,
         };
+        theme.id = this._resolveThemeId(theme.id);
 
         var source = rawTheme.tokens || rawTheme;
         if (!source || typeof source !== 'object') {
@@ -3147,6 +3421,7 @@ var ThemeEngine = {
     },
 
     _getBuiltinById: function(id) {
+        id = this._resolveThemeId(id);
         var builtinList = this._builtinThemes();
         for (var i = 0; i < builtinList.length; i++) {
             if (builtinList[i].id === id) return builtinList[i];
@@ -3187,6 +3462,9 @@ var ThemeEngine = {
         var sel = document.getElementById('theme-selector');
         if (sel) sel.value = this.activeThemeId;
         this._populateSelector();
+        if (ThemeHotReloadController && ThemeHotReloadController.setActiveTheme) {
+            ThemeHotReloadController.setActiveTheme(normalized);
+        }
         console.log('[ThemeEngine] Activated:', normalized.name || normalized.id);
     },
 
@@ -3215,6 +3493,179 @@ var ThemeEngine = {
         return !!this.installedThemes[themeId];
     }
 };
+
+var ThemeHotReloadController = {
+    intervalMs: 1200,
+    timer: null,
+    activeThemeId: null,
+    activePath: null,
+    lastHash: '',
+    lastError: '',
+    initialized: false,
+    applyingReload: false,
+
+    init: function() {
+        if (this.initialized) return;
+        this.initialized = true;
+        var self = this;
+        document.addEventListener('visibilitychange', function() {
+            self.handleContextChange();
+        });
+        this.updateStatus();
+    },
+
+    setActiveTheme: function(theme) {
+        if (!theme || !theme._localPath) {
+            this.activeThemeId = theme && theme.id ? theme.id : null;
+            this.activePath = null;
+            this.lastHash = '';
+            this.lastError = '';
+            this.stopTimer();
+            this.updateStatus('non-local');
+            return;
+        }
+
+        var sameTheme = this.activePath === theme._localPath && this.activeThemeId === theme.id;
+        this.activeThemeId = theme.id;
+        this.activePath = theme._localPath;
+        this.lastError = '';
+        if (this.applyingReload) {
+            this.updateStatus('active');
+            return;
+        }
+        if (!sameTheme && !this.applyingReload) {
+            this.lastHash = '';
+        }
+        this.handleContextChange();
+    },
+
+    handleContextChange: function() {
+        if (!this.activePath) {
+            this.stopTimer();
+            this.updateStatus('non-local');
+            return;
+        }
+        if (!this.shouldPoll()) {
+            this.stopTimer();
+            this.updateStatus('paused');
+            return;
+        }
+        this.updateStatus('active');
+        this.ensureTimer(0);
+    },
+
+    shouldPoll: function() {
+        return !!this.activePath && state.activeTab === 'themes' && !document.hidden;
+    },
+
+    ensureTimer: function(delay) {
+        if (this.timer || !this.shouldPoll()) return;
+        var self = this;
+        this.timer = window.setTimeout(function() {
+            self.timer = null;
+            self.tick();
+        }, typeof delay === 'number' ? delay : this.intervalMs);
+    },
+
+    stopTimer: function() {
+        if (!this.timer) return;
+        window.clearTimeout(this.timer);
+        this.timer = null;
+    },
+
+    tick: function() {
+        var self = this;
+        if (!this.shouldPoll()) {
+            this.handleContextChange();
+            return;
+        }
+        this.reloadOnce().finally(function() {
+            if (self.shouldPoll()) self.ensureTimer(self.intervalMs);
+            else self.handleContextChange();
+        });
+    },
+
+    cacheBustUrl: function(path) {
+        var joiner = path.indexOf('?') === -1 ? '?' : '&';
+        return path + joiner + 'pulseHotReload=' + Date.now();
+    },
+
+    fetchText: async function(path, optional) {
+        var resp = await fetch(this.cacheBustUrl(path), { cache: 'no-store' });
+        if (!resp.ok) {
+            if (optional && resp.status === 404) return '';
+            throw new Error(path + ' HTTP ' + resp.status);
+        }
+        return await resp.text();
+    },
+
+    hash: function(text) {
+        var hash = 2166136261;
+        for (var i = 0; i < text.length; i++) {
+            hash ^= text.charCodeAt(i);
+            hash += (hash << 1) + (hash << 4) + (hash << 7) + (hash << 8) + (hash << 24);
+        }
+        return (hash >>> 0).toString(16);
+    },
+
+    reloadOnce: async function() {
+        if (!this.activePath) return;
+        var themePath = this.activePath;
+        var cssPath = themePath.replace(/theme\.json(?:\?.*)?$/i, 'custom.css');
+        try {
+            var themeText = await this.fetchText(themePath, false);
+            var cssText = await this.fetchText(cssPath, true);
+            var nextHash = this.hash(themeText + '\n/* pulse-css */\n' + cssText);
+            if (this.lastHash === nextHash) {
+                this.updateStatus('active');
+                return;
+            }
+            var theme = JSON.parse(themeText);
+            theme.id = this.activeThemeId || theme.id;
+            theme._localPath = themePath;
+            theme.customCSS = cssText;
+            this.lastHash = nextHash;
+            this.applyingReload = true;
+            try {
+                ThemeEngine.activate(theme);
+            } finally {
+                this.applyingReload = false;
+            }
+            this.updateStatus('updated');
+        } catch (e) {
+            this.lastError = e.message || String(e);
+            this.updateStatus('error');
+        }
+    },
+
+    updateStatus: function(mode) {
+        var el = document.getElementById('themeHotReloadStatus');
+        if (!el) return;
+        el.classList.remove('is-active', 'is-paused', 'is-error');
+        if (!this.activePath || mode === 'non-local') {
+            el.textContent = '本地主题热更新：非本地主题不可热更新，外部 .pulse-theme 请重新拖入安装。';
+            return;
+        }
+        if (mode === 'error') {
+            el.classList.add('is-error');
+            el.textContent = '本地主题热更新：读取失败，' + (this.lastError || '请检查 theme.json/custom.css');
+            return;
+        }
+        if (mode === 'paused') {
+            el.classList.add('is-paused');
+            el.textContent = '本地主题热更新：已暂停，切回主题页后继续监听。';
+            return;
+        }
+        el.classList.add('is-active');
+        if (mode === 'updated') {
+            el.textContent = '本地主题热更新：已应用 ' + new Date().toLocaleTimeString();
+        } else {
+            el.textContent = '本地主题热更新：监听中 · ' + this.activePath;
+        }
+    }
+};
+
+window.ThemeHotReloadController = ThemeHotReloadController;
 
 function collectThemeEditorTokens() {
     return {
@@ -3262,8 +3713,8 @@ function normalizeThemePayload(theme) {
 async function installThemeFile(file) {
     if (!file) return;
     var lower = file.name.toLowerCase();
-    if (!lower.endsWith('.pulse-theme') && !lower.endsWith('.json')) {
-        showToast('仅支持 .pulse-theme 或 JSON 主题文件', 'error');
+    if (!lower.endsWith('.pulse-theme') && !lower.endsWith('.gaugepane-theme') && !lower.endsWith('.json')) {
+        showToast('仅支持 .pulse-theme、.gaugepane-theme 或 JSON 主题文件', 'error');
         return;
     }
     if (lower.endsWith('.pulse-theme')) {
@@ -3394,18 +3845,149 @@ function initThemeTools() {
     });
 }
 
+function refreshThemeSurface(options) {
+    options = options || {};
+    if (ThemeEngine && ThemeEngine._populateSelector) {
+        ThemeEngine._populateSelector();
+    }
+    updateThemeFilterButtons();
+    if (ThemeHotReloadController && ThemeHotReloadController.handleContextChange) {
+        ThemeHotReloadController.handleContextChange();
+    }
+    var grid = document.getElementById('marketplace-grid');
+    if (!grid) return;
+    if (options.forceMarketplace || !ThemeMarketplaceState.themes.length) {
+        loadMarketplace();
+    } else {
+        _renderMarketplaceGrid(mergeMarketplaceThemes(ThemeMarketplaceState.themes, getLocalMarketplaceThemes()), grid, document.getElementById('marketplace-status'), document.getElementById('marketplace-empty'));
+    }
+}
+
+function initThemeFilters() {
+    document.querySelectorAll('[data-theme-filter]').forEach(function(btn) {
+        btn.addEventListener('click', function() {
+            ThemeMarketplaceState.filter = btn.dataset.themeFilter || 'all';
+            var grid = document.getElementById('marketplace-grid');
+            if (grid) {
+                _renderMarketplaceGrid(ThemeMarketplaceState.themes, grid, document.getElementById('marketplace-status'), document.getElementById('marketplace-empty'));
+            }
+        });
+    });
+    var refresh = document.getElementById('marketplace-refresh-btn');
+    if (refresh) {
+        refresh.addEventListener('click', function() {
+            refreshThemeSurface({ forceMarketplace: true });
+        });
+    }
+}
+
 // ══════════════════════════════════════════════════
 //  Marketplace (M6.5)
 // ══════════════════════════════════════════════════
+
+var ThemeMarketplaceState = {
+    filter: 'all',
+    themes: [],
+    remoteOffline: true,
+    loading: false,
+};
+
+function getThemeTypeLabel(type) {
+    if (type === 'official') return '官方';
+    if (type === 'community') return '社区';
+    if (type === 'legacy-official') return '旧主题兼容';
+    if (type === 'local') return '本地';
+    if (type === 'custom') return '社区';
+    return type || '社区';
+}
+
+function getThemeCategories(theme) {
+    var categories = ['all'];
+    var type = theme.type || 'community';
+    if (type === 'official') categories.push('official');
+    if (type === 'community' || type === 'custom') categories.push('community');
+    if (theme._localPath || theme.builtin || theme.localOnly) categories.push('local');
+    if (ThemeEngine && ThemeEngine.isInstalled(theme.id)) categories.push('installed');
+    return categories;
+}
+
+function normalizeMarketplaceTheme(theme, source) {
+    var normalized = ThemeEngine && ThemeEngine._normalizeThemePayload
+        ? ThemeEngine._normalizeThemePayload(theme, source || 'marketplace')
+        : theme;
+    var marketplace = theme.marketplace || {};
+    var preview = theme.preview || {};
+    var tokens = normalized.tokens || {};
+    var signal = tokens.signal || {};
+    var surface = tokens.surface || {};
+    var text = tokens.text || {};
+    return Object.assign({}, theme, {
+        id: normalized.id,
+        name: normalized.name || theme.name || normalized.id,
+        author: normalized.author || theme.author || 'Unknown',
+        type: normalized.type || theme.type || 'community',
+        description: theme.description || normalized.description || marketplace.description || '',
+        price: Number(theme.price ?? marketplace.price ?? 0),
+        previewIcon: theme.previewIcon || preview.icon || '◷',
+        previewColor: theme.previewColor || (surface.panel || surface.base || '#111'),
+        previewIconColor: theme.previewIconColor || (signal.primary || text.primary || '#888'),
+        _themePayload: normalized,
+        _localPath: normalized._localPath,
+        builtin: normalized.builtin,
+        localOnly: source === 'local' || source === 'builtin',
+    });
+}
+
+function getLocalMarketplaceThemes() {
+    if (!ThemeEngine || !ThemeEngine.installedThemes) return [];
+    return Object.keys(ThemeEngine.installedThemes).map(function(id) {
+        var theme = ThemeEngine.installedThemes[id];
+        return normalizeMarketplaceTheme(theme, theme && theme.builtin ? 'builtin' : 'local');
+    });
+}
+
+function mergeMarketplaceThemes(remoteThemes, localThemes) {
+    var byId = {};
+    (localThemes || []).forEach(function(theme) {
+        byId[theme.id] = theme;
+    });
+    (remoteThemes || []).forEach(function(theme) {
+        var normalized = normalizeMarketplaceTheme(theme, 'remote');
+        byId[normalized.id] = Object.assign({}, byId[normalized.id] || {}, normalized);
+    });
+    return Object.keys(byId).map(function(id) { return byId[id]; }).sort(function(a, b) {
+        var gate = ThemeEngine ? ThemeEngine.officialGateThemeIds : [];
+        var ai = gate.indexOf(a.id);
+        var bi = gate.indexOf(b.id);
+        if (ai >= 0 || bi >= 0) return (ai < 0 ? 99 : ai) - (bi < 0 ? 99 : bi);
+        return String(a.name || a.id).localeCompare(String(b.name || b.id));
+    });
+}
+
+function getFilteredMarketplaceThemes(themes) {
+    var filter = ThemeMarketplaceState.filter || 'all';
+    return (themes || []).filter(function(theme) {
+        if (filter === 'all') return true;
+        return getThemeCategories(theme).indexOf(filter) >= 0;
+    });
+}
+
+function updateThemeFilterButtons() {
+    document.querySelectorAll('[data-theme-filter]').forEach(function(btn) {
+        btn.classList.toggle('active', btn.dataset.themeFilter === ThemeMarketplaceState.filter);
+    });
+}
 
 function _renderMarketplaceCard(t) {
     var item = document.createElement('div');
     item.className = 'marketplace-item';
     item.setAttribute('data-theme-id', t.id);
+    item.setAttribute('data-theme-categories', getThemeCategories(t).join(' '));
 
     var badgeText = (t.price > 0) ? '¥' + Number(t.price).toFixed(2) : '免费';
     var badgeClass = (t.price > 0) ? 'paid' : 'free';
-    var typeLabel = t.type === 'official' ? '官方' : (t.type === 'community' ? '社区' : (t.type || (t.price > 0 ? '官方' : '社区')));
+    var typeLabel = getThemeTypeLabel(t.type);
+    var installedText = ThemeEngine && ThemeEngine.isInstalled(t.id) ? ' · 已安装' : '';
 
     item.innerHTML =
         '<div class="marketplace-preview" style="background:' + (t.previewColor || '#000') + ';border:1px solid #333;">' +
@@ -3413,7 +3995,7 @@ function _renderMarketplaceCard(t) {
         '</div>' +
         '<div class="marketplace-info">' +
             '<div class="marketplace-name">' + escapeHtml(t.name) + '</div>' +
-            '<div class="marketplace-author">' + escapeHtml(t.author || '未知') + ' · ' + typeLabel + '</div>' +
+            '<div class="marketplace-author">' + escapeHtml(t.author || '未知') + ' · ' + typeLabel + installedText + '</div>' +
             '<div class="marketplace-badge ' + badgeClass + '">' + badgeText + '</div>' +
         '</div>';
 
@@ -3423,15 +4005,34 @@ function _renderMarketplaceCard(t) {
 
 function _renderMarketplaceGrid(themes, grid, status, empty) {
     grid.innerHTML = '';
-    if (!Array.isArray(themes) || themes.length === 0) {
-        if (status) status.classList.add('hidden');
+    ThemeMarketplaceState.themes = Array.isArray(themes) ? themes : [];
+    updateThemeFilterButtons();
+    var filtered = getFilteredMarketplaceThemes(ThemeMarketplaceState.themes);
+    if (!filtered.length) {
+        if (status) {
+            status.classList.remove('hidden');
+            status.textContent = ThemeMarketplaceState.remoteOffline
+                ? STORE_OFFLINE_MESSAGE
+                : '当前筛选下暂无主题。';
+            status.style.color = ThemeMarketplaceState.remoteOffline
+                ? 'var(--signal-warn, var(--color-yellow))'
+                : 'var(--text-muted, var(--color-grey-50))';
+        }
         if (empty) empty.classList.remove('hidden');
         return;
     }
-    if (status) { status.classList.add('hidden'); status.textContent = ''; }
+    if (status) {
+        status.classList.remove('hidden');
+        status.textContent = ThemeMarketplaceState.remoteOffline
+            ? STORE_OFFLINE_MESSAGE
+            : (filtered.length + ' 个主题可用');
+        status.style.color = ThemeMarketplaceState.remoteOffline
+            ? 'var(--signal-warn, var(--color-yellow))'
+            : 'var(--text-muted, var(--color-grey-50))';
+    }
     if (empty) empty.classList.add('hidden');
-    for (var i = 0; i < themes.length; i++) {
-        grid.appendChild(_renderMarketplaceCard(themes[i]));
+    for (var i = 0; i < filtered.length; i++) {
+        grid.appendChild(_renderMarketplaceCard(filtered[i]));
     }
 }
 
@@ -3440,43 +4041,32 @@ async function loadMarketplace() {
     var status = document.getElementById('marketplace-status');
     var empty = document.getElementById('marketplace-empty');
     if (!grid) return;
+    if (ThemeMarketplaceState.loading) return;
+    ThemeMarketplaceState.loading = true;
 
     try {
         var resp = await storeFetch('/v1/themes');
         if (!resp.ok) throw new Error('HTTP ' + resp.status);
         var themes = await resp.json();
-        _renderMarketplaceGrid(themes, grid, status, empty);
+        ThemeMarketplaceState.remoteOffline = false;
+        _renderMarketplaceGrid(mergeMarketplaceThemes(themes, getLocalMarketplaceThemes()), grid, status, empty);
     } catch (e) {
         console.info('[Marketplace] Store offline:', e.message);
+        ThemeMarketplaceState.remoteOffline = true;
         showStoreOffline(status, e.storeOffline ? STORE_OFFLINE_MESSAGE : ('无法连接主题商店 (' + e.message + ')'));
         showOfflineMarketplace(grid, status, empty);
+    } finally {
+        ThemeMarketplaceState.loading = false;
     }
 }
 
 function showOfflineMarketplace(grid, status, empty) {
     if (!grid) return;
-    grid.innerHTML = '';
-    var fallbackThemes = [
-        { id: 'builtin-constructivist', name: '苏维埃全主义构成', author: 'Pulse Team', type: '官方', price: 0, previewIcon: '★', previewColor: '#000', previewIconColor: '#CC0000' }
-    ];
-    for (var i = 0; i < fallbackThemes.length; i++) {
-        var t = fallbackThemes[i];
-        var item = document.createElement('div');
-        item.className = 'marketplace-item';
-        item.innerHTML =
-            '<div class="marketplace-preview" style="background:' + t.previewColor + ';border:1px solid #333;">' +
-                '<span style="font-size:24px;color:' + t.previewIconColor + ';">' + t.previewIcon + '</span>' +
-            '</div>' +
-            '<div class="marketplace-info">' +
-                '<div class="marketplace-name">' + t.name + '</div>' +
-                '<div class="marketplace-author">' + t.author + ' &middot; ' + t.type + '</div>' +
-                '<div class="marketplace-badge free">免费</div>' +
-            '</div>';
-        grid.appendChild(item);
-    }
+    ThemeMarketplaceState.remoteOffline = true;
+    _renderMarketplaceGrid(getLocalMarketplaceThemes(), grid, status, empty);
     if (status) {
-        status.textContent = '主题商店离线，显示本地可用主题。远端市场需要启动 127.0.0.1:8081。';
-        status.style.color = 'var(--color-yellow)';
+        status.textContent = STORE_OFFLINE_MESSAGE;
+        status.style.color = 'var(--signal-warn, var(--color-yellow))';
     }
 }
 
@@ -3495,7 +4085,7 @@ function showThemeDetail(theme) {
     var restoreBtn = document.getElementById('theme-detail-restore-btn');
 
     if (nameEl) nameEl.textContent = theme.name;
-    if (authorEl) authorEl.innerHTML = (theme.author || '未知') + ' &middot; ' + (theme.type || '官方');
+    if (authorEl) authorEl.innerHTML = escapeHtml(theme.author || '未知') + ' &middot; ' + getThemeTypeLabel(theme.type);
     if (descEl) descEl.textContent = theme.description || '暂无描述';
     if (priceEl) priceEl.textContent = theme.price > 0 ? '¥' + theme.price.toFixed(2) : '免费';
 
@@ -3506,7 +4096,7 @@ function showThemeDetail(theme) {
     }
     if (installBtn) {
         installBtn.style.display = (theme.price === 0 || installed) ? 'inline-block' : 'none';
-        installBtn.textContent = installed ? '安装' : '免费安装';
+        installBtn.textContent = installed ? '切换' : '免费安装';
         installBtn.onclick = function() { installTheme(theme); };
     }
     if (restoreBtn) {
@@ -3625,6 +4215,18 @@ function cancelPurchase() {
 
 async function installTheme(theme) {
     closeThemeDetail();
+    if (theme && theme._themePayload) {
+        ThemeEngine.activate(theme._themePayload);
+        showToast('已切换到主题 "' + (theme.name || theme.id) + '"', 'success');
+        refreshThemeSurface({ forceMarketplace: false });
+        return;
+    }
+    if (theme && ThemeEngine.installedThemes[theme.id]) {
+        ThemeEngine.activate(ThemeEngine.installedThemes[theme.id]);
+        showToast('已切换到主题 "' + (theme.name || theme.id) + '"', 'success');
+        refreshThemeSurface({ forceMarketplace: false });
+        return;
+    }
     try {
         var resp = await storeFetch('/v1/themes/' + theme.id);
         if (resp.ok) {
@@ -3769,9 +4371,11 @@ function initThemeSelector() {
                     .then(function(css) {
                         if (css) theme.customCSS = css;
                         ThemeEngine.activate(theme);
+                        refreshThemeSurface({ forceMarketplace: false });
                     });
             } else {
                 ThemeEngine.activate(theme);
+                refreshThemeSurface({ forceMarketplace: false });
             }
         }
     });
@@ -3780,13 +4384,10 @@ function initThemeSelector() {
 }
 
 function initMarketplaceOnTab() {
-    var settingsTab = document.querySelector('[data-tab=settings]');
-    if (settingsTab) {
-        settingsTab.addEventListener('click', function() {
-            var grid = document.getElementById('marketplace-grid');
-            if (grid && grid.children.length === 0) {
-                loadMarketplace();
-            }
+    var themesTab = document.querySelector('[data-tab=themes]');
+    if (themesTab) {
+        themesTab.addEventListener('click', function() {
+            refreshThemeSurface({ forceMarketplace: true });
         });
     }
 }
@@ -4255,6 +4856,8 @@ function showThemeMarketplace() {
     var overlay = document.getElementById('theme-marketplace-overlay');
     if (!overlay) return;
     overlay.classList.remove('hidden');
+    ThemeMarketplaceState.filter = 'all';
+    updateThemeFilterButtons();
     var grid = document.getElementById('theme-marketplace-grid');
     var status = document.getElementById('theme-marketplace-status');
     if (grid && status) {
@@ -4268,11 +4871,12 @@ async function loadMarketplaceToGrid(grid, status, empty) {
         var resp = await storeFetch('/v1/themes');
         if (!resp.ok) throw new Error('HTTP ' + resp.status);
         var themes = await resp.json();
-        _renderMarketplaceGrid(themes, grid, status, empty);
-        if (themes.length) status.textContent = themes.length + ' 个主题可用';
+        ThemeMarketplaceState.remoteOffline = false;
+        _renderMarketplaceGrid(mergeMarketplaceThemes(themes, getLocalMarketplaceThemes()), grid, status, empty);
     } catch (e) {
+        ThemeMarketplaceState.remoteOffline = true;
         showStoreOffline(status, e.storeOffline ? STORE_OFFLINE_MESSAGE : '商店暂不可用（离线模式）');
-        if (empty) empty.classList.remove('hidden');
+        showOfflineMarketplace(grid, status, empty);
     }
 }
 document.addEventListener('click', function(e) {
@@ -4320,7 +4924,7 @@ function showLanScan() {
             row.style.cssText = 'display:flex;align-items:center;justify-content:space-between;padding:12px;border:1px solid var(--color-grey-30);background:var(--color-black);';
             row.innerHTML = '<div><div style="font-family:var(--font-mono);font-size:14px;">' + escapeHtml(d.name || d.hostname) + '</div>' +
                 '<div style="font-size:11px;color:var(--color-grey-50);">' + escapeHtml(d.ip) + '</div></div>' +
-                '<button class="btn-secondary" style="min-height:36px;font-size:12px;" onclick="requestPair(\'' + escapeHtml(d.ip) + '\')">配对</button>';
+                '<button class="btn-secondary" style="min-height:44px;font-size:12px;" onclick="requestPair(\'' + escapeHtml(d.ip) + '\')">配对</button>';
             results.appendChild(row);
         });
     }).catch(function(e) {
@@ -4424,19 +5028,24 @@ function initPhase45() {
   if (!document.getElementById("titlebar")) return; // skip if HTML not loaded
   initTitleBar();
   initSetupBanner();
+  initWelcomeOverlay();
   initSetupForm();
   initSettingsForm();
   initAutostartToggle();
+  initCodexIntegration();
   initDeviceForm();
   checkFirstRun();
 
   // Theme Engine + Marketplace (M4.1 / M6.5)
   ThemeEngine.init();
+  ThemeHotReloadController.init();
   initThemeTools();
   initThemeSelector();
+  initThemeFilters();
   initMarketplaceOnTab();
   initMarketplaceOverlayButtons();
   initPairingOverlay();
+  maybeShowWelcomeOverlay();
   if (!document.getElementById("toast-container")) {
     var tc = document.createElement("div");
     tc.id = "toast-container";
